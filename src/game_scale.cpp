@@ -2,12 +2,15 @@
 //
 // TF3 (build 40408) sizes its views in one renderer function (0x1402FB630):
 //   resize(renderer, const ViewConfig* {width, height, ?, scale})
-// The main view's callers pass the Resolution Scale setting (settings + 0x7C; settings pointer read
-// by the getter at 0x1402C6A30) with the output size. Right before that the game also sizes a helper
-// view directly at the render size (output * slider) with scale 1.0. While a DLSS preset is active
-// the hook gives the main view the preset's scale and the helper view the matching render size.
-// A preset change repeats the game's last resize of both on the window thread, the thread the game
-// resizes from itself.
+// It stores the config at renderer + 0x78 and renders at width x height x scale. The world view's
+// renderer is resized
+//   - to the window size with the Resolution Scale setting (settings + 0x7C; settings pointer read by
+//     the getter at 0x1402C6A30) by the callers that size it to the window,
+//   - to its stored size with the new setting when graphics settings are applied (0x140E72642),
+//   - to 0x0 and back to its render size at scale 1.0, and up and back at scale 1.0 for screenshots.
+// While a DLSS preset is active every window-size resize of the world view gets the preset's scale,
+// so the slider has no effect. A preset change repeats the game's last window-size resize on the
+// window thread, the thread the game resizes from itself.
 #include "game_scale.h"
 
 #include <windows.h>
@@ -16,7 +19,6 @@
 #include <MinHook.h>
 
 #include <atomic>
-#include <cmath>
 #include <cstring>
 #include <mutex>
 
@@ -52,16 +54,13 @@ struct Call {
   void* renderer = nullptr;
   ViewConfig cfg{};  // as the game passed it
   bool valid = false;
-  int appliedW = 0, appliedH = 0;  // helper view: size we last gave it
 };
 std::mutex g_callMx;
-Call g_main, g_helper;
+Call g_main;  // the game's last window-size resize of the world view
 thread_local bool t_ours = false;  // inside a resize we issued ourselves
 
-int Scaled(int v, float s) { return (int)std::floor((float)v * s + 0.5f); }
-
-// Only the main view's callers pass the Resolution Scale setting: right before the call they load
-// it with `vmovss xmm0, [rax+7Ch]` (C5 FA 10 40 7C) from the settings object.
+// The callers that size views to the window load the Resolution Scale setting right before the call
+// with `vmovss xmm0, [rax+7Ch]` (C5 FA 10 40 7C) from the settings object.
 bool FromSettingsScale(const uint8_t* ret) {
   static const uint8_t kLoad[] = {0xC5, 0xFA, 0x10, 0x40, 0x7C};
   for (const uint8_t* p = ret - 48; p + sizeof(kLoad) <= ret; ++p)
@@ -69,34 +68,11 @@ bool FromSettingsScale(const uint8_t* ret) {
   return false;
 }
 
-// A view the game sizes to the render resolution itself (output * slider, scale 1.0).
-bool IsRenderSizeView(const ViewConfig& c, const ViewConfig& mainCfg, float slider) {
-  if (c.scale != 1.0f || slider <= 0.0f || c.width <= 0 || mainCfg.width <= 0) return false;
-  return std::abs(c.width - Scaled(mainCfg.width, slider)) <= 1 && std::abs(c.height - Scaled(mainCfg.height, slider)) <= 1;
-}
-
 float SliderScale() {
   if (!g_settingsPtr || !*g_settingsPtr) return 0.0f;
   float s;
   memcpy(&s, *g_settingsPtr + kSettingsScaleOffset, 4);
   return (s >= 0.1f && s <= 4.0f) ? s : 0.0f;
-}
-
-void ResizeHelper(void* renderer, const ViewConfig& orig, const ViewConfig& mainCfg, float o) {
-  ViewConfig c = orig;
-  if (o > 0.0f) {
-    c.width = Scaled(mainCfg.width, o);
-    c.height = Scaled(mainCfg.height, o);
-  }
-  {
-    std::lock_guard<std::mutex> lk(g_callMx);
-    if (g_helper.renderer == renderer) {
-      g_helper.appliedW = c.width;
-      g_helper.appliedH = c.height;
-    }
-  }
-  Log("game resize %dx%d (render-size view): %dx%d", orig.width, orig.height, c.width, c.height);
-  o_Resize(renderer, &c);
 }
 
 void __fastcall h_Resize(void* renderer, ViewConfig* cfg) {
@@ -107,64 +83,44 @@ void __fastcall h_Resize(void* renderer, ViewConfig* cfg) {
     return;
   }
   float o = g_override.load();
-  float slider = SliderScale();
-  if (FromSettingsScale(ret)) {
+  VkExtent2D se = SwapchainExtent();
+  bool windowSize = cfg->width > 0 && cfg->height > 0 &&
+                    (!se.width || (cfg->width == (int32_t)se.width && cfg->height == (int32_t)se.height));
+  bool settingsScale = FromSettingsScale(ret);
+  void* world;
+  {
+    std::lock_guard<std::mutex> lk(g_callMx);
+    world = g_main.renderer;
+  }
+  if (settingsScale && !windowSize) {
     // Previews in game windows (vehicle, station) also take the Resolution Scale; only the view
-    // that fills the window is the world view DLSS upscales.
-    VkExtent2D se = SwapchainExtent();
-    bool fullWindow = !se.width || (cfg->width == (int32_t)se.width && cfg->height == (int32_t)se.height);
-    if (!fullWindow) {
-      if (o > 0.0f && cfg->width > 0) {
-        // No DLSS on previews: their own scale (menu), not the slider the preset replaced.
-        ViewConfig c = *cfg;
-        uint32_t pm = Cfg().previewScale;
-        c.scale = pm == 1 ? o : pm == 2 ? cfg->scale : 1.0f;
-        Log("game resize %dx%d (preview): scale %.3f (%s)", c.width, c.height, c.scale,
-            pm == 1 ? "preset" : pm == 2 ? "game slider" : "full resolution");
-        o_Resize(renderer, &c);
-        return;
-      }
-      o_Resize(renderer, cfg);
-      return;
-    }
-    g_resizeThread = GetCurrentThreadId();
-    Call helper;
-    {
-      std::lock_guard<std::mutex> lk(g_callMx);
-      g_main = Call{renderer, *cfg, true};
-      helper = g_helper;
-    }
-    if (o > 0.0f && cfg->width > 0 && cfg->height > 0) {
+    // that fills the window is the world view DLSS upscales. Previews get no DLSS: full resolution
+    // or the preset's render scale (menu).
+    if (o > 0.0f && cfg->width > 0) {
       ViewConfig c = *cfg;
-      c.scale = o;
-      Log("game resize %dx%d: render scale %.3f instead of slider %.3f", c.width, c.height, o, cfg->scale);
+      c.scale = Cfg().previewScale == 1 ? o : 1.0f;
+      Log("game resize %dx%d (preview): scale %.3f", c.width, c.height, c.scale);
       o_Resize(renderer, &c);
-      // The helper view was sized (just before this call) from the slider: match it to our scale.
-      if (helper.valid && IsRenderSizeView(helper.cfg, *cfg, slider) &&
-          (helper.appliedW != Scaled(cfg->width, o) || helper.appliedH != Scaled(cfg->height, o))) {
-        t_ours = true;
-        ResizeHelper(helper.renderer, helper.cfg, *cfg, o);
-        t_ours = false;
-      }
       return;
     }
-    Log("game resize %dx%d: scale %.3f (game slider)", cfg->width, cfg->height, cfg->scale);
     o_Resize(renderer, cfg);
     return;
   }
-  Call mainCall;
-  {
-    std::lock_guard<std::mutex> lk(g_callMx);
-    mainCall = g_main;
-  }
-  // A render-size view: remember it (also when the main view has not been seen yet), and size it
-  // to our render resolution when the main view is known.
-  if (cfg->scale == 1.0f && cfg->width > 0) {
-    std::lock_guard<std::mutex> lk(g_callMx);
-    if (!mainCall.valid || IsRenderSizeView(*cfg, mainCall.cfg, slider)) g_helper = Call{renderer, *cfg, true, cfg->width, cfg->height};
-  }
-  if (o > 0.0f && mainCall.valid && IsRenderSizeView(*cfg, mainCall.cfg, slider)) {
-    ResizeHelper(renderer, *cfg, mainCall.cfg, o);
+  if (windowSize && (settingsScale || renderer == world)) {
+    g_resizeThread = GetCurrentThreadId();
+    {
+      std::lock_guard<std::mutex> lk(g_callMx);
+      g_main = Call{renderer, *cfg, true};
+    }
+    if (o > 0.0f) {
+      ViewConfig c = *cfg;
+      c.scale = o;
+      Log("game resize %dx%d: render scale %.3f instead of %.3f", c.width, c.height, o, cfg->scale);
+      o_Resize(renderer, &c);
+      return;
+    }
+    Log("game resize %dx%d: scale %.3f (game)", cfg->width, cfg->height, cfg->scale);
+    o_Resize(renderer, cfg);
     return;
   }
   Log("game resize %dx%d: scale %.3f left as is (caller +%#llx)", cfg->width, cfg->height, cfg->scale,
@@ -172,7 +128,7 @@ void __fastcall h_Resize(void* renderer, ViewConfig* cfg) {
   o_Resize(renderer, cfg);
 }
 
-// Window thread: repeat the game's last resize of the helper and main views with the current scale.
+// Window thread: repeat the game's last window-size resize of the world view with the current scale.
 void ResizeOnWindowThread() {
   // Only while the world view is being drawn: its renderer is then certainly alive. Otherwise the
   // game's own next resize (e.g. loading a save) applies the preset.
@@ -180,20 +136,17 @@ void ResizeOnWindowThread() {
     Log("render scale: no world view on screen - applies at the game's next resize");
     return;
   }
-  Call mainCall, helper;
+  Call mainCall;
   {
     std::lock_guard<std::mutex> lk(g_callMx);
     mainCall = g_main;
-    helper = g_helper;
   }
   if (!mainCall.valid) return;
   float o = g_override.load();
-  float slider = SliderScale();
-  t_ours = true;
-  if (helper.valid && IsRenderSizeView(helper.cfg, mainCall.cfg, slider)) ResizeHelper(helper.renderer, helper.cfg, mainCall.cfg, o);
   ViewConfig c = mainCall.cfg;
   if (o > 0.0f) c.scale = o;
   Log("resize for DLSS preset: %dx%d at scale %.3f", c.width, c.height, c.scale);
+  t_ours = true;
   o_Resize(mainCall.renderer, &c);
   t_ours = false;
 }

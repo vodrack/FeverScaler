@@ -131,17 +131,19 @@ What to attach to a bug report: [docs/diagnostics.txt](diagnostics.txt) (shipped
   stretches it.
 - DLSS-G switches on after 60 frames of 3D rendering and suspends itself in menus/loading screens.
 - **DLSS Super Resolution** (on by default, `SuperResolution=1`): the render resolution comes from
-  the DLSS preset picked in the dev menu (`DlssMode`): DLAA 100 %, Quality 66.7 %, Balanced 58 %,
-  Performance 50 %, Ultra Performance 33.3 %, or "Game's Resolution Scale slider". The preset takes
-  over once DLSS has produced its first frame; until then, and on PCs where DLSS cannot run, the
-  game's own Resolution Scale applies. The plugin hooks the game's renderer resize (build 40408
-  only, checked by code bytes; other builds keep the game's slider) and does not change the saved
-  slider value. It replaces the game's FSR1 upscale/sharpen/film grain. The DLSS model is chosen in
-  the dev menu (`DlssPreset`): CNN (E), Transformer (DLSS 4, K), Transformer 2 (DLSS 4.5, L,
-  default) or Transformer 2 fast (M).
+  the DLSS preset (`DlssMode`): DLAA 100 %, Quality 66.7 %, Balanced 58 %, Performance 50 %,
+  Ultra Performance 33.3 %. The preset takes over once DLSS has produced its first frame; until
+  then, and on PCs where DLSS cannot run, the game's own Resolution Scale applies. The plugin hooks
+  the game's renderer resize (build 40408 only, checked by code bytes; other builds keep the game's
+  slider): while the preset applies, every window-size resize of the world view, including the one
+  that applies changed graphics settings, gets the preset's scale, so the Resolution Scale slider
+  has no effect; the settings page shows it disabled while DLSS Super Resolution is on and usable.
+  The saved slider value does not change. DLSS replaces the game's FSR1 upscale/sharpen/film grain.
+  The DLSS model is chosen in the dev menu (`DlssPreset`): CNN (E), Transformer (DLSS 4, K),
+  Transformer 2 (DLSS 4.5, L, default) or Transformer 2 fast (M).
 - The 3D previews in vehicle / station windows are not upscaled by DLSS. While a preset is picked
-  they render at `PreviewScale`: 0 full resolution, 1 the preset's render scale (default), 2 the
-  game's slider. It is also in the dev menu and applies the next time a preview window opens.
+  they render at `PreviewScale`: 0 full resolution, 1 the preset's render scale (default). It is
+  also in the dev menu and applies the next time a preview window opens.
 - Screen-space reflections, while DLSS runs: the game's checkerboard ray offset (which DLSS would
   keep as a dot pattern) is off. The ray step grows with the render height (x1 at 480 lines), so
   reflections reach as far at DLAA as at Ultra Performance (in the unmodded game they get cut off

@@ -22,19 +22,18 @@ struct Config {
   float cameraCutDistance = 500.0f; // per-frame camera jump (m) that resets history
   int keyMenu = 0xDC;               // VK_OEM_5 (backslash on US layouts): show/hide the dev menu
   int slLogLevel = 1;               // bounded callback log: 0/1 warnings and errors, 2 also verbose info
-  // DLSS Super Resolution / DLAA (milestone 2). The render size is the game's Resolution Scale;
-  // DLSS upscales it to the output (DLAA at 100 %).
+  // DLSS Super Resolution / DLAA: renders at the dlssMode resolution and upscales it to the output.
   bool superResolution = true;
   uint32_t dlssPreset = 12;         // sl::DLSSPreset: 5 E (CNN), 11 K (transformer), 12 L / 13 M (2nd gen)
   // Alpha-to-coverage without MSAA is a fixed screen-space dot pattern (foliage, grass) that DLSS
   // keeps as detail; turned off while DLSS runs, DLSS anti-aliases the cut-out edges instead.
   bool keepAlphaToCoverage = false;
   bool hashedAlpha = true;  // replacement: hashed alpha test (DLSS averages it) instead of solid cut-outs
-  // DLSS preset = render resolution: 0 = the game's Resolution Scale slider, 1 DLAA (100 %),
+  // Render resolution while DLSS upscales, replacing the game's Resolution Scale: 1 DLAA (100 %),
   // 2 Quality (66.7 %), 3 Balanced (58 %), 4 Performance (50 %), 5 Ultra Performance (33.3 %).
   uint32_t dlssMode = 2;
   // Vehicle / station window previews (not upscaled by DLSS) while a preset sets the render size:
-  // 0 full resolution, 1 the preset's render scale, 2 the game's Resolution Scale slider.
+  // 0 full resolution, 1 the preset's render scale.
   uint32_t previewScale = 1;
 };
 const Config& Cfg();
@@ -53,11 +52,11 @@ std::string KeyName(int key);
 // Both keep the modifier bits; 0 if the key has no counterpart.
 int KeyFromScancode(int scancodeKey);
 int ScancodeFromKey(int key);
-constexpr uint32_t kPreviewScaleCount = 3;
-// Render scale of a DLSS preset (0 for "game slider").
-float DlssModeScale(uint32_t mode);
+constexpr uint32_t kPreviewScaleCount = 2;
+// DlssMode values run from 1 to kDlssModeLast.
+constexpr uint32_t kDlssModeLast = 5;
+float DlssModeScale(uint32_t mode);  // 0 for a value that is no mode
 const char* DlssModeName(uint32_t mode);
-constexpr uint32_t kDlssModeCount = 6;
 // Saved Resolution Scale in the actual game user-data folder; zero if unknown or invalid.
 float ReadGameResolutionScale(const wchar_t* userDataDir);
 }  // namespace feverscaler

@@ -28,12 +28,12 @@ void SaveFrameGeneration(bool on) {
 }
 
 float DlssModeScale(uint32_t mode) {
-  static const float k[kDlssModeCount] = {0.0f, 1.0f, 2.0f / 3.0f, 0.58f, 0.5f, 1.0f / 3.0f};
-  return mode < kDlssModeCount ? k[mode] : 0.0f;
+  static const float k[kDlssModeLast] = {1.0f, 2.0f / 3.0f, 0.58f, 0.5f, 1.0f / 3.0f};
+  return mode >= 1 && mode <= kDlssModeLast ? k[mode - 1] : 0.0f;
 }
 const char* DlssModeName(uint32_t mode) {
-  static const char* k[kDlssModeCount] = {"Game slider", "DLAA", "Quality", "Balanced", "Performance", "Ultra Performance"};
-  return mode < kDlssModeCount ? k[mode] : "?";
+  static const char* k[kDlssModeLast] = {"DLAA", "Quality", "Balanced", "Performance", "Ultra Performance"};
+  return mode >= 1 && mode <= kDlssModeLast ? k[mode - 1] : "?";
 }
 
 void SaveDlssMode(uint32_t mode) {
@@ -189,17 +189,17 @@ void LoadConfig() {
           "KeyMenu=0xDC\n"
           "; Streamline messages go to bounded FeverScaler logs: 0/1 warnings/errors, 2 verbose info\n"
           "SlLogLevel=1\n"
-          "; DLSS Super Resolution: upscales the game's render size (Resolution Scale in the game's\n"
-          "; graphics settings) to the screen; at 100 % it runs as DLAA. Also in the menu.\n"
+          "; DLSS Super Resolution: renders at the DlssMode resolution and upscales it to the screen;\n"
+          "; the game's Resolution Scale has no effect while it runs. Also in the menu.\n"
           "SuperResolution=1\n"
           "; DLSS model (preset): 5 = CNN, 11 = transformer (DLSS 4, K), 12 = 2nd-gen transformer\n"
           "; (DLSS 4.5, L, sharpest), 13 = 2nd-gen transformer, faster (M), 0 = DLSS default\n"
           "DlssPreset=12\n"
-          "; render resolution: 0 = the game's Resolution Scale slider, 1 DLAA (100 %), 2 Quality (66.7 %),\n"
-          "; 3 Balanced (58 %), 4 Performance (50 %), 5 Ultra Performance (33.3 %)\n"
+          "; render resolution: 1 DLAA (100 %), 2 Quality (66.7 %), 3 Balanced (58 %), 4 Performance (50 %),\n"
+          "; 5 Ultra Performance (33.3 %)\n"
           "DlssMode=2\n"
-          "; vehicle / station window previews (DLSS does not upscale them) while a preset is chosen:\n"
-          "; 0 = full resolution, 1 = the preset's render scale, 2 = the game's Resolution Scale slider\n"
+          "; vehicle / station window previews (DLSS does not upscale them):\n"
+          "; 0 = full resolution, 1 = the DlssMode render scale\n"
           "PreviewScale=1\n"
           "; 1 = keep the game's alpha-to-coverage with DLSS (without MSAA it renders foliage as a dot pattern)\n"
           "AlphaToCoverage=0\n"
@@ -258,7 +258,7 @@ void LoadConfig() {
   c.keepAlphaToCoverage = ReadInt(ini, L"AlphaToCoverage", 0) != 0;
   c.hashedAlpha = ReadInt(ini, L"HashedAlpha", 1) != 0;
   c.dlssMode = (uint32_t)ReadInt(ini, L"DlssMode", 2);
-  if (c.dlssMode >= kDlssModeCount) c.dlssMode = 2;
+  if (!DlssModeScale(c.dlssMode)) c.dlssMode = 2;
   c.previewScale = (uint32_t)ReadInt(ini, L"PreviewScale", 1);
   if (c.previewScale >= kPreviewScaleCount) c.previewScale = 1;
   g_cfg = c;

@@ -2,8 +2,9 @@
 --
 -- The settings page builds its tabs as plain tables inside one file-local function, with no
 -- extension point. This script loads a second instance of the game's settings_page.tl whose
--- `ipairs` is a pass-through that adds one more group to the Graphics tab, and registers that
--- instance as the replacement for the SettingsPage recipe (the game's recipe replacement API).
+-- `ipairs` is a pass-through that adds one more group to the Graphics tab (and disables the game's
+-- Resolution Scale slider while DLSS sets the render resolution), and registers that instance as
+-- the replacement for the SettingsPage recipe (the game's recipe replacement API).
 -- The page itself stays the game's own code, so it follows game updates. The page's option types
 -- have no key binding for anything but the game's own actions, so that instance also gets a
 -- `builtin` that adds a key button to the dev menu key's row.
@@ -73,6 +74,11 @@ local function setter(key)
 end
 
 -- ---- the group ---------------------------------------------------------------------------------
+-- DLSS Quality sets the render resolution: the plugin can (scaleControl) and SR is on and usable.
+local function dlssSetsScale()
+	return state.sr and state.srAvailable and state.scaleControl
+end
+
 local function makeGroup()
 	refresh(false)
 	if not state then
@@ -91,7 +97,7 @@ local function makeGroup()
 	for n = 1, math.min(5, math.max(1, state.maxFrames or 1)) do
 		multipliers[#multipliers + 1] = { "x" .. tostring(n + 1), "x" .. tostring(n + 1), n }
 	end
-	local presetActive = state.sr and state.scaleControl and state.mode ~= 0
+	local presetActive = dlssSetsScale()
 	local fgAvailable = state.fgAvailable
 
 	local group = {
@@ -118,10 +124,9 @@ local function makeGroup()
 					{ "balanced", "Balanced (58%)", 3 },
 					{ "performance", "Performance (50%)", 4 },
 					{ "ultra_performance", "Ultra Performance (33%)", 5 },
-					{ "slider", "Use Resolution Scale", 0 },
 				},
-				disabled = not state.sr or not state.scaleControl,
-				description = "The resolution the game renders at before DLSS upscales it.\n\nA higher value results in better quality, but requires more rendering performance. With \"Use Resolution Scale\" the Resolution Scale slider above sets it.",
+				disabled = not presetActive,
+				description = "The resolution the game renders at before DLSS upscales it. It replaces the Resolution Scale slider.\n\nA higher value results in better quality, but requires more rendering performance.",
 			},
 			{
 				name = "DLSS Model",
@@ -145,7 +150,6 @@ local function makeGroup()
 				params = {
 					{ "full", "Full", 0 },
 					{ "preset", "DLSS Quality", 1 },
-					{ "slider", "Resolution Scale", 2 },
 				},
 				disabled = not presetActive,
 				description = "Render resolution of the 3D previews in vehicle and station windows. DLSS does not upscale them.\n\nApplies the next time a preview window opens.",
@@ -190,6 +194,21 @@ local function makeGroup()
 	return group
 end
 
+-- While DLSS Quality sets the render resolution, the game's Resolution Scale slider has no effect.
+local function lockResolutionScale(groups)
+	if not state or not dlssSetsScale() then
+		return
+	end
+	for _, group in realIpairs(groups) do
+		for _, option in realIpairs(group.options or {}) do
+			if option.key == "resolutionScale" then
+				option.disabled = true
+				option.description = "Set by DLSS Quality while DLSS Super Resolution is on."
+			end
+		end
+	end
+end
+
 local function addGroup(groups)
 	for _, group in realIpairs(groups) do
 		if group.feverscaler then
@@ -199,6 +218,7 @@ local function addGroup(groups)
 	local ok, group = pcall(makeGroup)
 	if ok then
 		table.insert(groups, 2, group) -- after "Window Settings"
+		lockResolutionScale(groups)
 	else
 		log.warning("FeverScaler: could not build the settings group: " .. tostring(group))
 	end

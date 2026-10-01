@@ -393,29 +393,23 @@ void DrawMenu() {
       ImGui::TextColored(amber, "Waiting for the 3D view");
     if (sr.scaleControl) {
       ImGui::TextUnformatted("Render resolution");
-      for (uint32_t m = 1; m < kDlssModeCount; ++m) {
+      for (uint32_t m = 1; m <= kDlssModeLast; ++m) {
         char label[64];
         float sc = DlssModeScale(m);
         snprintf(label, sizeof(label), "%s (%.0f%%)", DlssModeName(m), sc * 100.0f);
         if (m != 1 && m != 4) ImGui::SameLine();
         if (ImGui::RadioButton(label, sr.renderMode == m)) SrSetMode(m);
       }
-      if (ImGui::RadioButton("Game's Resolution Scale slider", sr.renderMode == 0)) SrSetMode(0);
-      if (sr.renderMode == 0) {
+      // Vehicle / station window previews: DLSS does not upscale them.
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted("Previews");
+      static const char* kPreview[kPreviewScaleCount] = {"Full resolution", "Preset scale"};
+      for (uint32_t m = 0; m < kPreviewScaleCount; ++m) {
         ImGui::SameLine();
-        ImGui::TextDisabled("(%.0f%%)", sr.sliderScale * 100.0f);
-      } else {
-        // Vehicle / station window previews: DLSS does not upscale them.
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Previews");
-        static const char* kPreview[kPreviewScaleCount] = {"Full resolution", "Preset scale", "Game slider"};
-        for (uint32_t m = 0; m < kPreviewScaleCount; ++m) {
-          ImGui::SameLine();
-          if (ImGui::RadioButton(kPreview[m], cfg.previewScale == m)) SavePreviewScale(m);
-          if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Render size of the 3D preview in vehicle / station windows (not upscaled by DLSS).\n"
-                              "Applies the next time a preview window opens.");
-        }
+        if (ImGui::RadioButton(kPreview[m], cfg.previewScale == m)) SavePreviewScale(m);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Render size of the 3D preview in vehicle / station windows (not upscaled by DLSS).\n"
+                            "Applies the next time a preview window opens.");
       }
     } else {
       ImGui::TextDisabled("Render size = the game's Resolution Scale (this game build: no preset control)");

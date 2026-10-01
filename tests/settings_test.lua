@@ -185,6 +185,32 @@ for name in pairs(options()) do
     assert(not name:find("unavailable"), "no notes while everything runs")
 end
 
+-- The Graphics tab gets the group after "Window Settings". While DLSS Quality sets the render
+-- resolution the game's Resolution Scale slider is disabled; it stays usable whenever DLSS cannot
+-- set it (SR off or unusable, or no render scale control on this game build).
+seen = {}
+local settingsIpairs = assert(find(data().doReplace, "settingsIpairs"))
+local function graphicsGroups()
+    local groups = { { options = { { key = "screenMode" }, { key = "resolutionScale", description = "FSR" } } } }
+    for _ in settingsIpairs(groups) do end
+    assert(groups[2].feverscaler and groups[2].title == "FeverScaler")
+    return groups[1].options[2]
+end
+reset()
+local slider = graphicsGroups()
+assert(slider.disabled and slider.description ~= "FSR")
+for _, changes in ipairs({ { sr = false }, { srAvailable = false }, { scaleControl = false } }) do
+    reset(changes)
+    slider = graphicsGroups()
+    assert(not slider.disabled and slider.description == "FSR")
+end
+reset()
+opts = options()
+assert(#opts["DLSS Quality"].params == 5 and #opts["Preview Resolution"].params == 2)
+reset({ scaleControl = false })
+opts = options()
+assert(opts["DLSS Quality"].disabled and opts["Preview Resolution"].disabled)
+
 -- The settings page is replaced by the extended one, which falls back to the game's own page if
 -- it fails.
 local replaced
@@ -245,4 +271,4 @@ failPatchedPage = false
 view = replaced.page({ tab = "graphics" })
 assert(view.children[1].original == replaced.original and warnings == 1, "the fallback sticks and is logged once")
 print("PASS: state request, settings capabilities, x2-x6, persistence, dev menu key, "
-    .. "unavailable features and settings page replacement")
+    .. "unavailable features, Resolution Scale lock and settings page replacement")

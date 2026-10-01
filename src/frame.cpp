@@ -852,12 +852,11 @@ SrStatus SrGetStatus() {
   s.preset = Cfg().dlssPreset;
   s.renderMode = Cfg().dlssMode;
   s.scaleControl = GameScaleAvailable();
-  s.sliderScale = GameSliderScale();
   return s;
 }
 
 void SrSetMode(uint32_t mode) {
-  if (mode >= kDlssModeCount || mode == Cfg().dlssMode) return;
+  if (!DlssModeScale(mode) || mode == Cfg().dlssMode) return;
   Log("user: render resolution %s", DlssModeName(mode));
   SaveDlssMode(mode);  // SrOnPresent hands the scale to the game
   g_srResetNext = true;
@@ -893,7 +892,7 @@ static void SrOnPresent(bool frame3D) {
   }
   want = want && !g_srFailed.load();
   // Render resolution: the DLSS preset's scale while DLSS upscales, the game's slider otherwise.
-  GameSetScaleOverride(g_srScale.PresetScaleAllowed(want) && Cfg().dlssMode ? DlssModeScale(Cfg().dlssMode) : 0.0f);
+  GameSetScaleOverride(g_srScale.PresetScaleAllowed(want) ? DlssModeScale(Cfg().dlssMode) : 0.0f);
   GameScalePoll();
   if (want != g_srOn.load()) {
     g_srOn = want;

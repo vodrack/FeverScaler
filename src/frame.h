@@ -40,7 +40,6 @@ struct SrStatus {
   uint32_t preset = 0;  // sl::DLSSPreset in use
   uint32_t renderMode = 0;    // render resolution preset (config DlssMode)
   bool scaleControl = false;  // the plugin can set the render resolution on this game build
-  float sliderScale = 0;      // the game's own Resolution Scale
 };
 SrStatus SrGetStatus();
 bool SrActive();  // DLSS upscaling this frame (any thread)
