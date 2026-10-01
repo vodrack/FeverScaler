@@ -142,8 +142,9 @@ What to attach to a bug report: [docs/diagnostics.txt](diagnostics.txt) (shipped
   which the game runs with the slider at 95 % or below: while the preset applies, the world view's
   FSR1 is off (the renderer's FSR1 settings setter and getter are hooked, same build check). Other
   renderers keep the game's FSR1 settings, and the world view gets them back when the preset stops.
-  The DLSS model is chosen in the dev menu (`DlssPreset`): CNN (E), Transformer (DLSS 4, K),
-  Transformer 2 (DLSS 4.5, L, default) or Transformer 2 fast (M).
+  The DLSS model is chosen in the menus (`DlssPreset`): CNN (E), Transformer (DLSS 4, K),
+  Transformer 2 (DLSS 4.5, L, default) or Transformer 2 (DLSS 4.5, M). M is close to L at a lower
+  cost; on RTX 20/30, without FP8, L and M cost about 2–3x as much as K (DLSS programming guide).
 - The 3D previews in vehicle / station windows are not upscaled by DLSS. While a preset is picked
   they render at `PreviewScale`: 0 full resolution, 1 the preset's render scale (default). It is
   also in the dev menu and applies the next time a preview window opens.

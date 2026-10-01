@@ -134,13 +134,13 @@ local function makeGroup()
 				get = getter("preset"),
 				set = setter("preset"),
 				params = {
-					{ "cnn", "CNN (DLSS 3)", 5 },
-					{ "transformer", "Transformer (DLSS 4)", 11 },
-					{ "transformer2", "Transformer 2 (DLSS 4.5)", 12 },
-					{ "transformer2_fast", "Transformer 2 Fast (DLSS 4.5)", 13 },
+					{ "cnn", "CNN (DLSS 3, E)", 5 },
+					{ "transformer", "Transformer (DLSS 4, K)", 11 },
+					{ "transformer2_l", "Transformer 2 (DLSS 4.5, L)", 12 },
+					{ "transformer2_m", "Transformer 2 (DLSS 4.5, M)", 13 },
 				},
 				disabled = not state.sr,
-				description = "The DLSS model that upscales the image.\n\nTransformer 2 is the sharpest and most stable, and the most expensive. CNN is the cheapest and softest.",
+				description = "The DLSS model that upscales the image.\n\nTransformer 2 L is the sharpest and most stable, and the most expensive. Transformer 2 M looks close to L at a lower cost. CNN is the cheapest and softest.\n\nOn RTX 20 and 30 series cards, both Transformer 2 models cost about two to three times as much as Transformer.",
 			},
 			{
 				name = "Preview Resolution",

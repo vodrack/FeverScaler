@@ -422,10 +422,14 @@ void DrawMenu() {
       const char* tip;
     };
     static const Opt opts[] = {
-        {5, "CNN", "DLSS 3 convolutional model (preset E): cheapest, softest"},
-        {11, "Transformer", "DLSS 4 transformer model (preset K)"},
-        {12, "Transformer 2", "DLSS 4.5 second-generation transformer (preset L): sharpest, most stable, most expensive"},
-        {13, "Transformer 2 fast", "DLSS 4.5 second-generation transformer (preset M): close to L, faster"},
+        {5, "CNN (E)", "DLSS 3 convolutional model (preset E): cheapest, softest"},
+        {11, "Transformer (K)", "DLSS 4 transformer model (preset K)"},
+        {12, "Transformer 2 (L)",
+         "DLSS 4.5 second-generation transformer (preset L): sharpest, most stable, most expensive;\n"
+         "about 3x the cost of K on RTX 20/30"},
+        {13, "Transformer 2 (M)",
+         "DLSS 4.5 second-generation transformer (preset M): close to L at a lower cost;\n"
+         "about 2x the cost of K on RTX 20/30"},
     };
     for (const Opt& o : opts) {
       ImGui::SameLine();
