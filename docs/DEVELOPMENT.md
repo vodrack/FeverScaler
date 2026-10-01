@@ -138,7 +138,10 @@ What to attach to a bug report: [docs/diagnostics.txt](diagnostics.txt) (shipped
   slider): while the preset applies, every window-size resize of the world view, including the one
   that applies changed graphics settings, gets the preset's scale, so the Resolution Scale slider
   has no effect; the settings page shows it disabled while DLSS Super Resolution is on and usable.
-  The saved slider value does not change. DLSS replaces the game's FSR1 upscale/sharpen/film grain.
+  The saved slider value does not change. DLSS replaces the game's FSR1 upscale/sharpen/film grain,
+  which the game runs with the slider at 95 % or below: while the preset applies, the world view's
+  FSR1 is off (the renderer's FSR1 settings setter and getter are hooked, same build check). Other
+  renderers keep the game's FSR1 settings, and the world view gets them back when the preset stops.
   The DLSS model is chosen in the dev menu (`DlssPreset`): CNN (E), Transformer (DLSS 4, K),
   Transformer 2 (DLSS 4.5, L, default) or Transformer 2 fast (M).
 - The 3D previews in vehicle / station windows are not upscaled by DLSS. While a preset is picked
@@ -254,9 +257,10 @@ matrices even when its buffer was already jittered in that frame; the jitter is 
 
 Only the UI pass samples the DLSS output: after DLSS evaluates in a command buffer, the sets that
 pass binds with the scene image it stretches onto the screen are swapped for copies holding the
-output. The game's sets keep its image. Without FSR1, which the game skips with the Resolution
-Scale above 95 %, and at 100 % render scale, that image is also the tonemapper's input; fed the
-output, the tonemapper re-tonemaps it every frame and the scene turns grey. A frame counts as a
+output. The game's sets keep its image. Without FSR1 (off while the preset applies, otherwise with
+the Resolution Scale above 95 %) that image is the post-compose scene copy, which is also the
+tonemapper's input; fed the output, the tonemapper re-tonemaps it every frame and the scene turns
+grey. A frame counts as a
 DLSS frame only once a submitted UI pass bound the output; without one the UI pass shows the
 game's picture.
 

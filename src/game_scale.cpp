@@ -11,6 +11,13 @@
 // While a DLSS preset is active every window-size resize of the world view gets the preset's scale,
 // so the slider has no effect. A preset change repeats the game's last window-size resize on the
 // window thread, the thread the game resizes from itself.
+//
+// FSR1: each frame the renderer upscales with FSR1 and shows its output if its FSR settings are
+// enabled and the slider is at 95 % or below (0x1402FD1E8, 0x1402FE2BC). The game enables them with
+// that same condition at startup and when it applies settings, through the setter at 0x1403079B0;
+// the getter at 0x1402FD9D0 lets it copy them to other renderers and edit them. While the preset is
+// active the world view's renderer gets them disabled (DLSS replaces FSR1), set before its resize
+// like the game does; getter callers see the game's own settings. Other renderers keep the game's.
 #include "game_scale.h"
 
 #include <windows.h>
@@ -34,16 +41,30 @@ struct ViewConfig {
   int32_t width, height, other;
   float scale;
 };
+struct FsrSettings {
+  uint8_t enabled;
+  float sharpening, filmGrain, grainColor, grainShape;
+};
+static_assert(sizeof(FsrSettings) == 20, "the game copies 20 bytes");
 using ResizeFn = void(__fastcall*)(void* renderer, ViewConfig* cfg);
+using SetFsrFn = void(__fastcall*)(void* renderer, const FsrSettings* s);
+using GetFsrFn = const FsrSettings*(__fastcall*)(void* renderer);
 
 constexpr uint32_t kResizeRva = 0x2FB630;
 constexpr uint32_t kSettingsGetterRva = 0x2C6A30;
+constexpr uint32_t kSetFsrRva = 0x3079B0;
+constexpr uint32_t kGetFsrRva = 0x2FD9D0;
 constexpr uint32_t kSettingsScaleOffset = 0x7C;
 const uint8_t kResizeBytes[] = {0x40, 0x56, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B, 0xF1, 0x4C, 0x8B, 0xF2};
 const uint8_t kGetterBytes[] = {0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x05};
+// mov rcx, [rcx+138h] (the renderer's FSR1 pass); jmp to its setter / getter
+const uint8_t kSetFsrBytes[] = {0x48, 0x8B, 0x89, 0x38, 0x01, 0x00, 0x00, 0xE9, 0x24, 0x43, 0xDB, 0xFF};
+const uint8_t kGetFsrBytes[] = {0x48, 0x8B, 0x89, 0x38, 0x01, 0x00, 0x00, 0xE9, 0xB4, 0xE2, 0xDB, 0xFF};
 
-bool g_available = false;
+bool g_available = false, g_fsrControl = false;
 ResizeFn o_Resize = nullptr;
+SetFsrFn o_SetFsr = nullptr;
+GetFsrFn o_GetFsr = nullptr;
 uint8_t** g_settingsPtr = nullptr;  // address of the global settings pointer
 std::atomic<float> g_override{0.0f};
 std::atomic<float> g_fileScale{0.0f};
@@ -55,9 +76,49 @@ struct Call {
   ViewConfig cfg{};  // as the game passed it
   bool valid = false;
 };
-std::mutex g_callMx;
+std::mutex g_callMx;  // guards g_main and the FSR1 state
 Call g_main;  // the game's last window-size resize of the world view
 thread_local bool t_ours = false;  // inside a resize we issued ourselves
+void* g_fsrOff = nullptr;  // the world renderer whose FSR1 we disabled
+FsrSettings g_gameFsr{};   // its FSR1 settings as the game wants them
+
+// Before a resize of the world renderer: FSR1 disabled while the preset applies, else the game's.
+void SyncFsr(void* world, bool presetActive) {
+  if (!g_fsrControl || !world) return;
+  FsrSettings s;
+  {
+    std::lock_guard<std::mutex> lk(g_callMx);
+    if (presetActive == (g_fsrOff == world)) return;
+    if (presetActive) {
+      g_gameFsr = *o_GetFsr(world);  // not disabled by us: the game's own
+      g_fsrOff = world;
+    } else {
+      g_fsrOff = nullptr;
+    }
+    s = g_gameFsr;
+    if (presetActive) s.enabled = 0;
+  }
+  Log("game FSR1 %s", presetActive ? "off while the DLSS preset sets the render resolution"
+                                   : (s.enabled ? "back on" : "stays off (game setting)"));
+  o_SetFsr(world, &s);
+}
+
+void __fastcall h_SetFsr(void* renderer, const FsrSettings* s) {
+  FsrSettings v = *s;
+  {
+    std::lock_guard<std::mutex> lk(g_callMx);
+    if (renderer == g_fsrOff) {
+      g_gameFsr = v;
+      v.enabled = 0;
+    }
+  }
+  o_SetFsr(renderer, &v);
+}
+
+const FsrSettings* __fastcall h_GetFsr(void* renderer) {
+  std::lock_guard<std::mutex> lk(g_callMx);
+  return renderer == g_fsrOff ? &g_gameFsr : o_GetFsr(renderer);
+}
 
 // The callers that size views to the window load the Resolution Scale setting right before the call
 // with `vmovss xmm0, [rax+7Ch]` (C5 FA 10 40 7C) from the settings object.
@@ -112,6 +173,7 @@ void __fastcall h_Resize(void* renderer, ViewConfig* cfg) {
       std::lock_guard<std::mutex> lk(g_callMx);
       g_main = Call{renderer, *cfg, true};
     }
+    SyncFsr(renderer, o > 0.0f);
     if (o > 0.0f) {
       ViewConfig c = *cfg;
       c.scale = o;
@@ -145,6 +207,7 @@ void ResizeOnWindowThread() {
   float o = g_override.load();
   ViewConfig c = mainCall.cfg;
   if (o > 0.0f) c.scale = o;
+  SyncFsr(mainCall.renderer, o > 0.0f);
   Log("resize for DLSS preset: %dx%d at scale %.3f", c.width, c.height, c.scale);
   t_ours = true;
   o_Resize(mainCall.renderer, &c);
@@ -168,6 +231,13 @@ bool GameScaleInit() {
   g_available = e == MH_OK;
   Log("render scale control: %s (resize hook %d/%d, settings at %p)", g_available ? "ready" : "FAILED", (int)c, (int)e,
       (void*)g_settingsPtr);
+  uint8_t* setFsr = base + kSetFsrRva;
+  uint8_t* getFsr = base + kGetFsrRva;
+  if (g_available && !memcmp(setFsr, kSetFsrBytes, sizeof(kSetFsrBytes)) && !memcmp(getFsr, kGetFsrBytes, sizeof(kGetFsrBytes)) &&
+      MH_CreateHook(setFsr, (void*)h_SetFsr, (void**)&o_SetFsr) == MH_OK &&
+      MH_CreateHook(getFsr, (void*)h_GetFsr, (void**)&o_GetFsr) == MH_OK)
+    g_fsrControl = MH_EnableHook(setFsr) == MH_OK && MH_EnableHook(getFsr) == MH_OK;
+  Log("FSR1 control: %s", g_fsrControl ? "ready" : "unavailable - the game's FSR1 also runs while DLSS upscales");
   return g_available;
 }
 

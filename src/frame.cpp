@@ -825,9 +825,9 @@ void OnUiPassBegin(VkCommandBuffer cb, CbState* st) {
     FEVERSCALER_LOG_N(1, "HUD-less copy recorded (source %ux%u -> slot %u)", hudW, hudH, slot);
   }
   if (dlssOk) {
-    // Hand-off: only this UI pass samples our image instead of the scene image. Without FSR1 (slider
-    // above 95 %) or at 100 % render scale that image is also the tonemapper's input, which must stay
-    // the game's: fed our output, the tonemapper turns the scene grey within a few frames.
+    // Hand-off: only this UI pass samples our image instead of the scene image. Without FSR1 (off
+    // while the DLSS preset applies, and above a 95 % slider) that image is also the tonemapper's
+    // input, which must stay the game's: fed our output, the tonemapper turns the scene grey.
     Barrier(cb, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
