@@ -233,8 +233,8 @@ The plugin adds a "FeverScaler" group to the Graphics tab of the game's settings
 | `src/frame.cpp` | per-frame logic: instance/joint diffing, pre-pass (depth copy, camera MV, object replay), HUD-less copy, gate |
 | `src/gpu.cpp` | the plugin's Vulkan resources and pipelines |
 | `shaders/` | camera motion (compute) and replay shaders (mirror the game's vertex math) |
-| DLSS SR (in `frame.cpp`) | jitters the camera block before submit, runs DLSS on the post-compose scene copy at the UI pass, hands the result to the UI pass (redirected descriptor or copy-back) |
-| `src/mip_bias.cpp` | texture mip bias while DLSS upscales: copies of the game's descriptor sets with biased samplers, bound in the world pass |
+| DLSS SR (in `frame.cpp`) | jitters the camera block before submit, runs DLSS on the post-compose scene copy at the UI pass, hands the result to that UI pass only (see [Rendering failure handling](#rendering-failure-handling)) |
+| `src/mip_bias.cpp` | copies of the game's descriptor sets: biased samplers for the world pass while DLSS upscales, the DLSS output in place of the scene image for the UI pass |
 | `src/overlay.cpp` | dev menu: Dear ImGui drawn into the presented image, WndProc subclass for mouse input |
 | `src/bridge.cpp` | serves the settings script to the game; its state file |
 | `settings/` | the settings script and the resource file that registers it |
@@ -242,18 +242,25 @@ The plugin adds a "FeverScaler" group to the Graphics tab of the game's settings
 ## Rendering failure handling
 
 With both DLSS switches off, submits skip the pre-pass, motion processing and tags; the HUD-less
-copy is off too. A few existing redirected frames can still receive the game's image while they
-drain. Depth and colour copies require tracked single-sample images and transfer-source usage.
-Multisampled depth suspends DLSS-G immediately and never reaches the depth copy.
+copy is off too. Depth and colour copies require tracked single-sample images and transfer-source
+usage. Multisampled depth suspends DLSS-G immediately and never reaches the depth copy.
 The UI-recording guard uses the most recently recorded world depth, since the game's UI command
 buffer can be recorded before its world command buffer is submitted. Destroying that image clears
 the recorded handle.
 If accumulated frame data is reset before presentation, the camera is recovered from the original
 matrices even when its buffer was already jittered in that frame; the jitter is not applied twice.
 
+Only the UI pass samples the DLSS output: after DLSS evaluates in a command buffer, the sets that
+pass binds with the scene image it stretches onto the screen are swapped for copies holding the
+output. The game's sets keep its image. Without FSR1, which the game skips with the Resolution
+Scale above 95 %, and at 100 % render scale, that image is also the tonemapper's input; fed the
+output, the tonemapper re-tonemaps it every frame and the scene turns grey. A frame counts as a
+DLSS frame only once a submitted UI pass bound the output; without one the UI pass shows the
+game's picture.
+
 Foliage and reflection pipeline copies and mip-biased descriptor set copies apply only after SR
 produces an image, and only to the world view. The game's original shaders, descriptor sets and
-samplers stay available for fallback. After 300 world frames without an SR image, including a
+samplers stay available for fallback. After 300 world frames without a DLSS frame, including a
 startup that never succeeds, SR stops for the session and releases its resolution and MSAA
 overrides. MSAA remains off if FG still needs it.
 The dev menu and the settings page report the SR failure. Restart the game to retry.

@@ -1,4 +1,5 @@
-// Texture mip bias while DLSS upscales (see mip_bias.h).
+// Plugin copies of the game's descriptor sets (see mip_bias.h): texture mip bias in the world pass,
+// and the DLSS output in place of the scene image in the UI pass.
 //
 // The bias is log2(render width / output width) on top of the game's own sampler bias, so textures
 // are sampled as at the output resolution. Only descriptors that pair a mip-mapped sampler with a
@@ -43,7 +44,8 @@ struct Slot {
   bool written = false, bias = false;
 };
 struct Copy {
-  int steps = 0;
+  int steps = 0;                       // mip bias, 0 for a scene copy
+  VkImageView scene = VK_NULL_HANDLE;  // DLSS output in place of the scene image, null for a bias copy
   VkDescriptorSet set = VK_NULL_HANDLE;
   VkDescriptorPool pool = VK_NULL_HANDLE;
 };
@@ -193,11 +195,16 @@ bool Allocate(Layout& l, VkDescriptorSetLayout handle, Copy* c) {
   return true;
 }
 
-// Our copy of the game's set: every written descriptor, with the biased samplers swapped for twins.
-bool MakeCopy(Set& s, Copy* c) {
+bool Shows(const Slot& slot, const VkImageView* views, uint32_t n) {
+  return slot.written && slot.image.imageView && std::find(views, views + n, slot.image.imageView) != views + n;
+}
+
+// Our copy of the game's set: every written descriptor, with the biased samplers swapped for twins
+// (bias copy) or the scene views for the DLSS output (scene copy).
+bool MakeCopy(Set& s, Copy* c, const VkImageView* scene, uint32_t sceneCount) {
   Layout& l = *s.layout;
   if (!Allocate(l, s.handle, c)) {
-    FEVERSCALER_LOG_N(3, "mip bias: no descriptor set for a copy - that set stays unbiased");
+    FEVERSCALER_LOG_N(3, "descriptor set copy: no set allocated - the game's set is bound");
     return false;
   }
   size_t n = 0;
@@ -224,10 +231,14 @@ bool MakeCopy(Set& s, Copy* c) {
       switch (KindOf(w.descriptorType)) {
         case Kind::Image:
           images.push_back(slot.image);
-          if (slot.bias && !(images.back().sampler = Twin(slot.image.sampler, c->steps))) {
+          if (c->steps && slot.bias && !(images.back().sampler = Twin(slot.image.sampler, c->steps))) {
             vk.vkFreeDescriptorSets(gDevice, c->pool, 1, &c->set);
             FEVERSCALER_LOG_N(3, "mip bias: sampler copy failed - that set stays unbiased");
             return false;
+          }
+          if (c->scene && Shows(slot, scene, sceneCount)) {
+            images.back().imageView = c->scene;
+            images.back().imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
           }
           w.pImageInfo = &images.back();
           break;
@@ -244,7 +255,8 @@ bool MakeCopy(Set& s, Copy* c) {
       writes.push_back(w);
     }
   vk.vkUpdateDescriptorSets(gDevice, (uint32_t)writes.size(), writes.data(), 0, nullptr);
-  FEVERSCALER_LOG_N(1, "mip bias: first descriptor set copy (%zu descriptors)", writes.size());
+  if (c->scene) FEVERSCALER_LOG_N(1, "UI pass: first descriptor set copy showing the DLSS output (%zu descriptors)", writes.size());
+  else FEVERSCALER_LOG_N(1, "mip bias: first descriptor set copy (%zu descriptors)", writes.size());
   return true;
 }
 
@@ -421,30 +433,53 @@ void MipBiasOnUpdate(uint32_t nw, const VkWriteDescriptorSet* w, uint32_t nc, co
   }
 }
 
-VkDescriptorSet MipBiasSet(VkDescriptorSet set) {
-  int steps = g_steps.load(std::memory_order_relaxed);
-  if (!steps) return set;
+namespace {
+// The copy of `set` with this bias (steps) or this scene swap, made on first use; `set` when the set
+// has nothing to change.
+VkDescriptorSet CopyOf(VkDescriptorSet set, int steps, const VkImageView* scene, uint32_t sceneCount, VkImageView output) {
+  auto needed = [&](const Set& s) {
+    if (!s.supported) return false;
+    if (steps) return s.biased;
+    for (const auto& binding : s.slots)
+      for (const Slot& slot : binding)
+        if (Shows(slot, scene, sceneCount)) return true;
+    return false;
+  };
+  auto existing = [&](const Set& s) {
+    for (const Copy& c : s.copies)
+      if (c.steps == steps && c.scene == output) return c.set;
+    return VkDescriptorSet(VK_NULL_HANDLE);
+  };
   {
     std::shared_lock lk(g_mx);
     auto it = g_sets.find(set);
-    if (it == g_sets.end() || !it->second.biased || !it->second.supported) return set;
-    for (const Copy& c : it->second.copies)
-      if (c.steps == steps) return c.set;
+    if (it == g_sets.end() || !needed(it->second)) return set;
+    if (VkDescriptorSet c = existing(it->second)) return c;
   }
   std::unique_lock lk(g_mx);
   auto it = g_sets.find(set);
-  if (it == g_sets.end() || !it->second.biased || !it->second.supported || !it->second.layout->alive) return set;
+  if (it == g_sets.end() || !needed(it->second) || !it->second.layout->alive) return set;
   Set& s = it->second;
-  for (const Copy& c : s.copies)
-    if (c.steps == steps) return c.set;
+  if (VkDescriptorSet c = existing(s)) return c;
   Copy c;
   c.steps = steps;
-  if (!MakeCopy(s, &c)) {
+  c.scene = output;
+  if (!MakeCopy(s, &c, scene, sceneCount)) {
     s.supported = false;  // do not retry on every bind
     return set;
   }
   s.copies.push_back(c);
   return c.set;
+}
+}  // namespace
+
+VkDescriptorSet MipBiasSet(VkDescriptorSet set) {
+  int steps = g_steps.load(std::memory_order_relaxed);
+  return steps ? CopyOf(set, steps, nullptr, 0, VK_NULL_HANDLE) : set;
+}
+
+VkDescriptorSet SceneSet(VkDescriptorSet set, const VkImageView* scene, uint32_t sceneCount, VkImageView output) {
+  return CopyOf(set, 0, scene, sceneCount, output);
 }
 
 void MipBiasOnPresent(float renderToOutput, uint64_t frame) {

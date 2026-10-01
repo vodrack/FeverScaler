@@ -177,29 +177,19 @@ bool GetImageDesc(VkImage img, ImageDesc* out) {
   return true;
 }
 
-// ---- scene redirect (DLSS output -> UI pass) -------------------------------------------------------
-static std::mutex g_redirMx;
-static std::atomic<bool> g_redirOn{false};
-static VkImage g_redirFrom = VK_NULL_HANDLE;
-static VkImageView g_redirTo = VK_NULL_HANDLE;
-static VkImageView g_redirViews[4] = {};
-static uint32_t g_redirCount = 0;
-
-void SetSceneRedirect(VkImage from, VkImageView to) {
-  std::lock_guard<std::mutex> rl(g_redirMx);
-  if (from == g_redirFrom && to == g_redirTo) return;
-  g_redirFrom = from;
-  g_redirTo = to;
-  g_redirCount = 0;
-  if (from && to) {
+void ShowSceneOutput(CbState* st, VkImageView output) {
+  st->sceneViewCount = 0;
+  {
     std::shared_lock lk(g_mx);
-    auto it = g_imgs.find(from);
+    auto it = g_imgs.find(st->candImage);
     if (it != g_imgs.end())
       for (VkImageView v : it->second.views)
-        if (g_redirCount < 4) g_redirViews[g_redirCount++] = v;
+        if (st->sceneViewCount < std::size(st->sceneViews)) st->sceneViews[st->sceneViewCount++] = v;
   }
-  g_redirOn = g_redirCount != 0;
-  Log("scene redirect: %p (%u views) -> %p", (void*)from, g_redirCount, (void*)to);
+  st->sceneOut = st->sceneViewCount ? output : VK_NULL_HANDLE;
+  static std::atomic<VkImage> logged{VK_NULL_HANDLE};
+  if (logged.exchange(st->candImage) != st->candImage)
+    Log("UI pass: scene image %p (%u views) shows the DLSS output", (void*)st->candImage, st->sceneViewCount);
 }
 
 bool IsMipmappedTexture(VkImageView view) {
@@ -488,48 +478,6 @@ static VKAPI_ATTR void VKAPI_CALL w_UpdateDescriptorSets(VkDevice d, uint32_t nw
     DescBindings& db = g_sets[wr.dstSet];
     (wr.dstBinding == 10 ? db.b10 : db.b11) = b;
   }
-  if (g_redirOn.load(std::memory_order_relaxed)) {
-    VkImageView to, views[4];
-    uint32_t nv;
-    {
-      std::lock_guard<std::mutex> rl(g_redirMx);
-      to = g_redirTo;
-      nv = g_redirCount;
-      memcpy(views, g_redirViews, sizeof(views));
-    }
-    auto hit = [&](VkImageView v) {
-      for (uint32_t i = 0; i < nv; ++i)
-        if (views[i] == v) return true;
-      return false;
-    };
-    auto isImage = [](const VkWriteDescriptorSet& wr) {
-      return wr.pImageInfo && (wr.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||
-                               wr.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-    };
-    bool any = false;
-    for (uint32_t i = 0; i < nw && !any; ++i)
-      if (isImage(w[i]))
-        for (uint32_t k = 0; k < w[i].descriptorCount; ++k) any |= hit(w[i].pImageInfo[k].imageView);
-    if (any && to) {
-      std::vector<VkWriteDescriptorSet> ws(w, w + nw);
-      std::vector<std::vector<VkDescriptorImageInfo>> infos;
-      infos.reserve(nw);
-      for (auto& wr : ws) {
-        if (!isImage(wr)) continue;
-        infos.emplace_back(wr.pImageInfo, wr.pImageInfo + wr.descriptorCount);
-        for (auto& ii : infos.back())
-          if (hit(ii.imageView)) {
-            ii.imageView = to;
-            ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-          }
-        wr.pImageInfo = infos.back().data();
-      }
-      FEVERSCALER_LOG_N(1, "scene redirect: first descriptor write redirected to the DLSS output");
-      vk.vkUpdateDescriptorSets(d, nw, ws.data(), nc, c);
-      MipBiasOnUpdate(nw, ws.data(), nc, c);
-      return;
-    }
-  }
   vk.vkUpdateDescriptorSets(d, nw, w, nc, c);
   MipBiasOnUpdate(nw, w, nc, c);
 }
@@ -759,13 +707,18 @@ static VKAPI_ATTR void VKAPI_CALL w_CmdBindDescriptorSets(VkCommandBuffer cb, Vk
     for (uint32_t i = 0; i < n && first + i < 8; ++i) st->sets[first + i] = sets[i];
     // u_skinned is the only dynamic uniform buffer we read; it lives in set 3 (last set bound).
     if (first <= 3 && first + n > 3) st->dyn3 = nd ? dyn[nd - 1] : 0;
-    // While DLSS upscales the world: copies whose texture samplers have the mip bias.
-    if (st->inMainPass && n <= 8 && SrActive()) {
-      VkDescriptorSet biased[8];
+    // While DLSS upscales the world: copies whose texture samplers have the mip bias. In the UI pass
+    // after a DLSS evaluate: copies that sample the DLSS output instead of the scene image.
+    if (n <= 8 && ((st->inMainPass && SrActive()) || st->sceneOut)) {
+      VkDescriptorSet copies[8];
       bool any = false;
-      for (uint32_t i = 0; i < n; ++i) any |= (biased[i] = MipBiasSet(sets[i])) != sets[i];
+      for (uint32_t i = 0; i < n; ++i) {
+        copies[i] = st->sceneOut ? SceneSet(sets[i], st->sceneViews, st->sceneViewCount, st->sceneOut) : MipBiasSet(sets[i]);
+        any |= copies[i] != sets[i];
+      }
       if (any) {
-        vk.vkCmdBindDescriptorSets(cb, bp, layout, first, n, biased, nd, dyn);
+        st->sceneShown |= st->sceneOut != VK_NULL_HANDLE;
+        vk.vkCmdBindDescriptorSets(cb, bp, layout, first, n, copies, nd, dyn);
         return;
       }
     }

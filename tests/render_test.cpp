@@ -21,6 +21,8 @@ static bool core = true, fgReady = true, srReady = true;
 static unsigned gpuInit = 0, renderTargets = 0, submits = 0, tags = 0, hudlessAllocs = 0, srAllocs = 0;
 static float slider = 1.0f, overrideScale = 0.0f;
 static GpuSlot slot;
+static GpuImage srOut;
+static bool dlssRuns = false;  // DLSS configures, evaluates and has an output image
 static VkPipeline bound{};
 static std::wstring noPath;
 const std::wstring& PluginDir() { return noPath; }
@@ -58,15 +60,15 @@ bool SlSetGeneration(bool, uint32_t, bool) { return true; }
 uint32_t SlFramesMax() { return 5; }
 bool SlTagFrame(const SlImage&, const SlImage&, const SlImage*) { ++tags; return true; }
 bool SlSetConstants(const sl::Constants&) { return true; }
-bool SlDlssConfigure(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
-bool SlDlssEvaluate(VkCommandBuffer, const SlImage&, const SlImage&, const SlImage&, const SlImage&) { return false; }
+bool SlDlssConfigure(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) { return dlssRuns; }
+bool SlDlssEvaluate(VkCommandBuffer, const SlImage&, const SlImage&, const SlImage&, const SlImage&) { return dlssRuns; }
 bool GpuReady() { return true; }
 bool GpuInit(uint32_t) { ++gpuInit; return true; }
 GpuSlot& GpuGetSlot(uint32_t) { return slot; }
 void GpuWaitSlot(GpuSlot&) {}
 bool GpuEnsureRenderTargets(GpuSlot&, uint32_t, uint32_t, VkFormat) { ++renderTargets; return false; }
 bool GpuEnsureHudless(GpuSlot&, uint32_t, uint32_t, VkFormat) { ++hudlessAllocs; return false; }
-GpuImage* GpuEnsureSrOutput(uint32_t, uint32_t) { ++srAllocs; return nullptr; }
+GpuImage* GpuEnsureSrOutput(uint32_t, uint32_t) { ++srAllocs; return dlssRuns ? &srOut : nullptr; }
 void GpuUpdateDescriptors(GpuSlot&) {}
 void GpuCollectGarbage(uint64_t) {}
 VkPipelineLayout GpuPipelineLayout() { return {}; }
@@ -353,5 +355,89 @@ int main() {
   CHECK(frees == 3);
   bind(set);
   CHECK(boundSet == set);
-  std::puts("PASS: off switches, unsupported features, MSAA guards, world/preview identity, SR-only pipelines and mip bias copies");
+
+  // DLSS output hand-off. Without FSR1 (slider above 95 %) the image the UI pass stretches onto the
+  // screen is the post-compose scene copy, which the tonemapper also reads. Only the UI pass may
+  // sample the DLSS output: the tonemapper fed it re-tonemaps it every frame into a grey screen.
+  vk.vkCmdPipelineBarrier = [](VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags, uint32_t,
+                               const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*, uint32_t,
+                               const VkImageMemoryBarrier*) {};
+  VkDescriptorSetLayoutBinding texBinding{0, combined, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+  lci.bindingCount = 1;
+  lci.pBindings = &texBinding;
+  VkDescriptorSetLayout texLayout;
+  CHECK(createLayout(gDevice, &lci, nullptr, &texLayout) == VK_SUCCESS);
+  ai.pSetLayouts = &texLayout;
+  VkDescriptorSet composeSet, uiSet, iconSet;
+  CHECK(allocate(gDevice, &ai, &composeSet) == VK_SUCCESS && allocate(gDevice, &ai, &uiSet) == VK_SUCCESS &&
+        allocate(gDevice, &ai, &iconSet) == VK_SUCCESS);
+  VkImage scene = (VkImage)950;
+  VkImageView sceneView = (VkImageView)951;
+  g_imgs[scene] = {VK_FORMAT_R16G16B16A16_SFLOAT, 1280, 720,
+                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                   VK_SAMPLE_COUNT_1_BIT, {sceneView}};
+  g_views[sceneView] = {scene};
+  VkDescriptorImageInfo sceneInfo{trilinear, sceneView, ro}, iconInfo{trilinear, texView, ro};
+  VkWriteDescriptorSet tw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+  tw.dstBinding = 0; tw.descriptorCount = 1; tw.descriptorType = combined;
+  auto writeTexture = [&](VkDescriptorSet s, const VkDescriptorImageInfo* info) {
+    tw.dstSet = s; tw.pImageInfo = info;
+    w_UpdateDescriptorSets(gDevice, 1, &tw, 0, nullptr);
+  };
+  writeTexture(composeSet, &sceneInfo);
+  writeTexture(uiSet, &sceneInfo);
+  writeTexture(iconSet, &iconInfo);
+  srOut = {(VkImage)952, (VkDeviceMemory)953, (VkImageView)954, VK_FORMAT_R16G16B16A16_SFLOAT, 1920, 1080,
+           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+  slot.depth.image = (VkImage)955; slot.depth.w = 1280; slot.depth.h = 720;
+  slot.mv.image = (VkImage)956; slot.mv.w = 1280; slot.mv.h = 720;
+  g_cfg.superResolution = true; g_cfg.frameGeneration = false; g_srFailed = false; g_srOn = true;
+  g_dlssFrameOk = false;
+  VkCommandBuffer uiCb = (VkCommandBuffer)957;
+  CbState* ui = GetCbState(uiCb);
+  auto bindIn = [&](VkCommandBuffer c, VkDescriptorSet s) {
+    w_CmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, {}, 0, 1, &s, 0, nullptr);
+  };
+  auto recordFrame = [&](bool dlss) {
+    dlssRuns = dlss;
+    g_cam.valid = true;  // a submit starting a frame clears it
+    ui->Reset();
+    ui->candImage = ui->srIn = scene;
+    ui->candW = ui->srInW = 1280; ui->candH = ui->srInH = 720;
+    ui->candLayout = ui->srInLayout = ro;
+    bindIn(uiCb, composeSet);  // the tonemapper, before the UI pass
+    CHECK(boundSet == composeSet);
+    OnUiPassBegin(uiCb, ui);
+  };
+  auto submitUi = [&] {
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1; si.pCommandBuffers = &uiCb;
+    CHECK(w_QueueSubmit({}, 1, &si, {}) == VK_SUCCESS);
+  };
+  recordFrame(true);
+  CHECK(ui->sceneOut == srOut.view);
+  bindIn(uiCb, iconSet);
+  CHECK(boundSet == iconSet && !ui->sceneShown);  // other UI textures stay the game's
+  submitUi();
+  CHECK(!g_dlssFrameOk);  // evaluated but never on screen: not a DLSS frame
+  recordFrame(true);
+  bindIn(uiCb, uiSet);
+  VkDescriptorSet uiCopy = boundSet;
+  CHECK(uiCopy != uiSet && written.size() == 1 && written[0].imageView == srOut.view && written[0].sampler == trilinear);
+  bindIn(uiCb, uiSet);
+  CHECK(boundSet == uiCopy && ui->sceneShown);
+  submitUi();
+  CHECK(g_dlssFrameOk);
+  // The game's own sets never sample the DLSS output: a rewrite of the tonemapper's set reaches the
+  // driver unchanged, and the next frame's tonemapper binds it as is.
+  writeTexture(composeSet, &sceneInfo);
+  CHECK(written.size() == 1 && written[0].imageView == sceneView);
+  recordFrame(true);
+  // No DLSS image in a frame: the UI pass shows the game's picture.
+  recordFrame(false);
+  CHECK(!ui->sceneOut);
+  bindIn(uiCb, uiSet);
+  CHECK(boundSet == uiSet);
+  std::puts("PASS: off switches, unsupported features, MSAA guards, world/preview identity, SR-only pipelines, mip bias "
+            "copies and the UI-only DLSS hand-off");
 }

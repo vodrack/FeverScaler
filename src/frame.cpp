@@ -10,7 +10,7 @@
 // DLSS Super Resolution (when on): the main camera block is jittered in mapped memory at the
 // first submit that uses it; at the UI pass DLSS upscales the post-compose scene copy into our
 // display-size image, and the UI pass samples that instead of the game's own scene texture
-// (descriptor writes are redirected in the tracker).
+// (the tracker binds set copies in that pass, ShowSceneOutput).
 #include "frame.h"
 
 #include <windows.h>
@@ -114,10 +114,9 @@ static float g_baseFps = 0;
 static std::atomic<bool> g_srOn{false};
 static bool g_srWanted = false;                // present thread
 static std::atomic<bool> g_dlssLive{false};    // DLSS made the last frames' image: jitter the camera
-static std::atomic<bool> g_dlssFrameOk{false}; // DLSS evaluated in this frame's command buffer
+static std::atomic<bool> g_dlssFrameOk{false}; // a submitted UI pass showed this frame's DLSS output
 static int g_dlssMisses = 0;
 static std::atomic<bool> g_srResetNext{true};  // DLSS history reset at the next evaluate
-static int g_redirLinger = 0;                  // UI passes that must still fill our image after SR off
 static std::atomic<uint32_t> g_jitterW{0}, g_jitterH{0};  // render size the jitter is computed for
 static std::atomic<bool> g_srFailed{false};
 static uint32_t g_srRenderW = 0, g_srRenderH = 0, g_srOutW = 0, g_srOutH = 0;  // last evaluate (menu)
@@ -749,8 +748,7 @@ static bool RecordDlss(VkCommandBuffer cb, CbState* st, GpuSlot& s, GpuImage& ou
 static bool FrameActive() { return SlCoreReady() && (SlFgReady() || SlDlssAvailable()); }
 
 void OnUiPassBegin(VkCommandBuffer cb, CbState* st) {
-  if (!GpuReady() || !FrameActive()) return;
-  if (!RenderWorkRequested() && g_redirLinger <= 0) return;
+  if (!GpuReady() || !FrameActive() || !RenderWorkRequested()) return;
   ImageDesc color;
   if (!GetImageDesc(st->candImage, &color) || color.samples != VK_SAMPLE_COUNT_1_BIT ||
       !(color.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) return;
@@ -776,12 +774,10 @@ void OnUiPassBegin(VkCommandBuffer cb, CbState* st) {
     // sample-count guard; submit-time state alone would spuriously disable SR every few frames.
     VkImage depthImage = st->hasMainPass ? st->mainDepth : WorldDepthImage();
     if (!GetImageDesc(depthImage, &depth) || depth.samples != VK_SAMPLE_COUNT_1_BIT ||
-        !(depth.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+        !(depth.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
       sr = hud = false;
-      SetSceneRedirect(VK_NULL_HANDLE, VK_NULL_HANDLE);
-    }
     if (hud && !GpuEnsureHudless(s, se.width, se.height, sf)) hud = false;
-    if (sr || g_redirLinger > 0) out = GpuEnsureSrOutput(se.width, se.height);
+    if (sr) out = GpuEnsureSrOutput(se.width, se.height);
     // This frame's camera if its 3D submits came first, else last frame's (DLSS mostly needs the
     // jitter and the motion vectors; the pre-pass sets the exact constants for DLSS-G later).
     camThisFrame = g_cam.valid && g_camFrame == g_frame.load();
@@ -800,34 +796,16 @@ void OnUiPassBegin(VkCommandBuffer cb, CbState* st) {
   };
   VkImage hudSrc = st->candImage;
   uint32_t hudW = st->candW, hudH = st->candH;
-  VkImageLayout hudSrcLayout = st->candLayout;
-  bool dlssOk = false;
-  if (out) {
-    if (sr) dlssOk = RecordDlss(cb, st, s, *out, cur, prev, camThisFrame);
-    VkImageLayout outLayout = VK_IMAGE_LAYOUT_GENERAL;
-    if (!dlssOk) {
-      // No DLSS image this frame, but the UI pass may already sample ours: fill it with the game's
-      // own picture, stretched the way the UI pass would have.
-      Barrier(cb, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-      Barrier(cb, st->candImage, VK_IMAGE_ASPECT_COLOR_BIT, st->candLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-              VK_ACCESS_TRANSFER_READ_BIT);
-      blit(st->candImage, st->candW, st->candH, out->image, out->w, out->h);
-      Barrier(cb, st->candImage, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, st->candLayout,
-              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT);
-      outLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    }
-    Barrier(cb, out->image, VK_IMAGE_ASPECT_COLOR_BIT, outLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+  // Without a DLSS image the UI pass shows the game's own picture.
+  bool dlssOk = out && RecordDlss(cb, st, s, *out, cur, prev, camThisFrame);
+  if (dlssOk) {
+    Barrier(cb, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT);
     hudSrc = out->image;
     hudW = out->w;
     hudH = out->h;
-    hudSrcLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    if (!sr && g_redirLinger > 0) --g_redirLinger;
-    if (dlssOk) g_dlssFrameOk = true;
-    FEVERSCALER_LOG_N(1, "UI pass: %s -> DLSS output %ux%u", dlssOk ? "DLSS evaluated" : "plain upscale", out->w, out->h);
+    FEVERSCALER_LOG_N(1, "UI pass: DLSS evaluated -> DLSS output %ux%u", out->w, out->h);
   }
   if (hud) {
     if (hudSrc == st->candImage)
@@ -846,33 +824,15 @@ void OnUiPassBegin(VkCommandBuffer cb, CbState* st) {
     st->hudlessSlot = (int)slot;
     FEVERSCALER_LOG_N(1, "HUD-less copy recorded (source %ux%u -> slot %u)", hudW, hudH, slot);
   }
-  if (out) {
-    // Hand-off to the UI pass. If the image it stretches onto the screen is already display-sized
-    // (DLAA, or the game's FSR1 upscaling to full size) and writable, copy our result into it: at
-    // 100 % scale that image is also the scene copy the tonemapper reads, so redirecting its
-    // descriptors would feed our output back into the game's post chain. Otherwise (render-size
-    // image) the UI pass samples our image through redirected descriptor writes.
-    ImageDesc cd;
-    bool copyBack = sr && GetImageDesc(st->candImage, &cd) && cd.w == out->w && cd.h == out->h &&
-                    (cd.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    if (copyBack) {
-      Barrier(cb, st->candImage, VK_IMAGE_ASPECT_COLOR_BIT, st->candLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
-              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-      blit(out->image, out->w, out->h, st->candImage, cd.w, cd.h);
-      Barrier(cb, st->candImage, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, st->candLayout,
-              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-              VK_ACCESS_SHADER_READ_BIT);
-      SetSceneRedirect(VK_NULL_HANDLE, VK_NULL_HANDLE);
-      FEVERSCALER_LOG_N(1, "DLSS output handed over by copying into the game's %ux%u scene image", cd.w, cd.h);
-    } else if (sr) {
-      SetSceneRedirect(st->candImage, out->view);
-    }
+  if (dlssOk) {
+    // Hand-off: only this UI pass samples our image instead of the scene image. Without FSR1 (slider
+    // above 95 %) or at 100 % render scale that image is also the tonemapper's input, which must stay
+    // the game's: fed our output, the tonemapper turns the scene grey within a few frames.
     Barrier(cb, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    ShowSceneOutput(st, out->view);
   }
-  (void)hudSrcLayout;
 }
 
 // ---- DLSS Super Resolution control (present thread) ---------------------------------------------------
@@ -939,11 +899,7 @@ static void SrOnPresent(bool frame3D) {
     g_srOn = want;
     g_srResetNext = true;
     g_dlssMisses = 0;
-    if (!want) {
-      g_dlssLive = false;
-      SetSceneRedirect(VK_NULL_HANDLE, VK_NULL_HANDLE);
-      g_redirLinger = 3;  // descriptor writes already redirected for frames in flight
-    }
+    if (!want) g_dlssLive = false;
     Log("DLSS Super Resolution %s", want ? "on" : "off");
   }
   if (g_srOn.load()) {
@@ -996,6 +952,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_QueueSubmit(VkQueue q, uint32_t n, const
         ProcessCommandBuffer(st);
         if (st->hasMainPass) ++g_mainPassesOpen;
         if (st->uiPassSeen) uiSt = st;
+        if (st->sceneShown) g_dlssFrameOk = true;
       }
     if (first) SlOnFirstSubmit();
   }

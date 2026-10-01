@@ -78,6 +78,12 @@ struct CbState {
   VkImage srIn = VK_NULL_HANDLE;
   VkImageLayout srInLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   uint32_t srInW = 0, srInH = 0;
+  // DLSS output for the rest of this recording's UI pass (ShowSceneOutput): the views of candImage it
+  // replaces, and whether a bind has shown it.
+  VkImageView sceneOut = VK_NULL_HANDLE;
+  VkImageView sceneViews[4] = {};
+  uint32_t sceneViewCount = 0;
+  bool sceneShown = false;
 
   void Reset();
 };
@@ -105,9 +111,10 @@ struct ImageDesc {
 bool GetImageDesc(VkImage img, ImageDesc* out);
 // A mip-mapped image the game only samples (an asset texture, not a render target or storage image).
 bool IsMipmappedTexture(VkImageView view);
-// DLSS output hand-off: descriptor writes that sample `from` (the image the UI pass stretches onto
-// the screen) get `to` instead. Pass nulls to stop.
-void SetSceneRedirect(VkImage from, VkImageView to);
+// DLSS output hand-off: the rest of this recording's UI pass binds copies of the sets that sample
+// st->candImage (the image it stretches onto the screen), with `output` in its place. Only the UI
+// pass, see OnUiPassBegin.
+void ShowSceneOutput(CbState* st, VkImageView output);
 void SetSwapchainImages(const VkImage* imgs, uint32_t n);
 bool IsSwapchainImage(VkImage img);
 void SetSwapchainInfo(VkExtent2D extent, VkFormat format);
