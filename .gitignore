@@ -1,0 +1,7 @@
+build/
+*.log
+.vs/
+*.dmp
+*.pdb
+*.obj
+*.user

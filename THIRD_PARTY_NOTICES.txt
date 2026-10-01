@@ -1,0 +1,70 @@
+FeverScaler third-party notices
+
+FeverScaler's own code is licensed under the MIT License (LICENSE). The components
+below keep their own licenses. Full license texts are in licenses/ in the source
+tree and in scripts/feverscaler/licenses/ in the native ZIP.
+
+FeverScaler is not affiliated with or endorsed by NVIDIA.
+
+1. NVIDIA Streamline 2.12.0
+   NVIDIA Corporation. Framework and headers: MIT. The DLSS and Reflex
+   components are covered by the NVIDIA terms in 2.
+   https://github.com/NVIDIA-RTX/Streamline
+   Included: sl.interposer.dll, sl.common.dll, sl.dlss.dll, sl.dlss_g.dll,
+   sl.reflex.dll, sl.pcl.dll
+   Notices: Streamline-license.txt, Streamline-3rd-party-licenses.md
+
+2. NVIDIA DLSS/NGX and NVIDIA Reflex
+   NVIDIA Corporation. NVIDIA RTX SDK and Reflex SDK license agreements.
+   Included, unmodified: nvngx_dlss.dll, nvngx_dlssg.dll, NvLowLatencyVk.dll
+   https://github.com/NVIDIA-RTX/Streamline/tree/main/external/ngx-sdk
+   https://github.com/NVIDIA-RTX/Streamline/tree/main/external/reflex-sdk-vk
+   Notices: NVIDIA-RTX-SDKs-license.txt, NVIDIA-Reflex-license.txt
+
+3. RTX30MFG-Unlock v1.2.2
+   Copyright (c) 2026 Michael Robles and Marcus Soderholm. MIT.
+   https://github.com/mcsoderh/RTX30MFG-Unlock
+   Source commit: 21a2b9931f0c13f46a4b3b8a5856620d9698f88e
+   FeverScaler patches its logging only: rtx30mfg-compact-logging.patch
+   Notice: RTX30MFG-Unlock-LICENSE.txt
+
+4. Dear ImGui v1.92.9b
+   Copyright (c) 2014-2026 Omar Cornut. MIT.
+   https://github.com/ocornut/imgui/tree/v1.92.9b
+   Statically linked in feverscaler.asi, with the Win32 and Vulkan backends.
+   Notice: ImGui-LICENSE.txt
+
+5. Dear ImGui's imstb_truetype, imstb_rectpack, imstb_textedit
+   Copyright (c) 2017 Sean Barrett. MIT (one of the author's two license options).
+   Used for fonts and UI internals.
+   https://github.com/nothings/stb
+   Notice: stb-LICENSES.txt
+
+6. ProggyClean and ProggyForever fonts (embedded)
+   Tristan Grimmer and Disco Hello. MIT.
+   Notice: Proggy-fonts-LICENSE.txt
+
+7. MinHook and Hacker Disassembler Engine
+   Tsuda Kageyu and Vyacheslav Patkov. BSD 2-clause.
+   https://github.com/TsudaKageyu/minhook
+   Statically linked in feverscaler.asi, the unlock and Ultimate ASI Loader.
+   Notices: MinHook-LICENSE.txt, Ultimate-ASI-Loader-MinHook-LICENSE.txt
+
+8. Ultimate ASI Loader v9.7.4, x64
+   Copyright (c) 2023 ThirteenAG. MIT.
+   https://github.com/ThirteenAG/Ultimate-ASI-Loader/tree/v9.7.4
+   Source commit: 6b440669144c4a0bef5718ab155df160d231cd42
+   Included as winhttp.dll (the official dinput8.dll under a supported proxy name).
+   Notice: Ultimate-ASI-Loader-LICENSE.txt
+   Contains: MinHook/HDE; miniz (RAD Game Tools, Valve Software, Rich Geldreich,
+   Tenacious Software LLC, MIT); FunctionHookMinHook (praydog, MIT); injector
+   (LINK/2012, zlib-style); exception tracer (LINK/2012, public domain). Each has
+   its own notice file.
+
+9. bg3fgvk
+   Copyright (c) 2026 thierbig. MIT.
+   https://github.com/thierbig/bg3fgvk
+   Reference commit: 072f051a7a5b0b152b5872fb58df3974b2d06922
+   The Vulkan/Streamline integration in src/hooks.cpp and src/sl_bridge.cpp
+   follows its approach.
+   Notice: bg3fgvk-LICENSE.txt

@@ -1,0 +1,137 @@
+--- a/source/native/temporal_interval_trace.cpp
++++ b/source/native/temporal_interval_trace.cpp
+@@ -67,6 +67,7 @@
+ LARGE_INTEGER gQpcFrequency{};
+ int64_t gLastWrittenQpc = 0;
+ FILE* gTrace = nullptr;
++std::atomic<bool> gWriteTrace{false}; // FeverScaler: counters stay live, disk trace is opt-in.
+ wchar_t gFileName[64]{};
+ wchar_t gFilePath[32768]{};
+ 
+@@ -142,6 +143,8 @@
+ 
+ bool OpenTrace() noexcept
+ {
++    if (!gWriteTrace.load(std::memory_order_relaxed))
++        return false;
+     if (gTrace)
+         return true;
+     if (!FullyInitialized() || !gFilePath[0])
+@@ -214,6 +217,9 @@
+         gInvalidSamples.fetch_add(1, std::memory_order_relaxed);
+     }
+ 
++    if (!gWriteTrace.load(std::memory_order_relaxed))
++        return valid;
++
+     PSLIST_ENTRY entry = InterlockedPopEntrySList(&gFreeEvents);
+     if (!entry)
+     {
+@@ -240,8 +246,11 @@
+         InterlockedPushEntrySList(&gFreeEvents, &node.link);
+     QueryPerformanceFrequency(&gQpcFrequency);
+ 
+-    swprintf_s(gFileName, L"MfgUnlock-intervals-%lu.csv",
+-        static_cast<unsigned long>(pid));
++    (void)pid;
++    wchar_t traceSetting[8]{};
++    GetEnvironmentVariableW(L"FEVERSCALER_UNLOCK_TRACE", traceSetting, 8);
++    gWriteTrace.store(wcscmp(traceSetting, L"1") == 0);
++    wcscpy_s(gFileName, L"feverscaler-unlock-trace.csv");
+     if (tempDirectory && *tempDirectory)
+     {
+         wcsncpy_s(gFilePath, tempDirectory, _TRUNCATE);
+@@ -316,6 +325,16 @@
+ 
+     for (EventNode* node : nodes)
+     {
++        // Even explicitly requested traces stop at 1 MiB. Keep all live counters.
++        if (gTrace && _ftelli64(gTrace) >= 1024 * 1024 - 1024)
++        {
++            std::fputs("# FeverScaler: trace size limit reached; live counters continue.\n", gTrace);
++            std::fclose(gTrace);
++            gTrace = nullptr;
++            gWriteTrace.store(false, std::memory_order_relaxed);
++            gLogReady.store(false, std::memory_order_release);
++        }
++        if (!gTrace) { ReturnNode(node); continue; }
+         const Event& event = node->event;
+         const bool valid = ValidTemporalSample(event);
+         const double position = valid
+@@ -349,7 +368,7 @@
+         gLastWrittenQpc = event.qpc;
+         ReturnNode(node);
+     }
+-    std::fflush(gTrace);
++    if (gTrace) std::fflush(gTrace);
+ }
+ 
+ Snapshot ReadSnapshot() noexcept
+--- a/source/native/patcher.cpp
++++ b/source/native/patcher.cpp
+@@ -487,8 +487,14 @@
+     OutputDebugStringW(L"\n");
+     if (gLog)
+     {
+-        fwprintf_s(gLog, L"%s\n", message);
+-        fflush(gLog);
++        // FeverScaler: one bounded file, serialized with the CRT stream lock.
++        _lock_file(gLog);
++        if (_ftelli64(gLog) < 512 * 1024 - 8192)
++        {
++            fwprintf_s(gLog, L"%s\n", message);
++            fflush(gLog);
++        }
++        _unlock_file(gLog);
+     }
+ }
+ 
+@@ -6522,16 +6528,6 @@
+     const DWORD pid = GetCurrentProcessId();
+     wchar_t tempDirectory[MAX_PATH]{};
+     DWORD tempLength = GetTempPathW(_countof(tempDirectory), tempDirectory);
+-    std::wstring logPath;
+-    if (tempLength > 0 && tempLength < _countof(tempDirectory))
+-    {
+-        wchar_t logName[64]{};
+-        swprintf_s(logName, L"MfgUnlock-%lu.log", static_cast<unsigned long>(pid));
+-        logPath = JoinPath(tempDirectory, logName);
+-        gLog = _wfsopen(logPath.c_str(), L"w, ccs=UTF-8", _SH_DENYWR);
+-    }
+-    gLogReady.store(gLog != nullptr, std::memory_order_release);
+-
+     const std::wstring mappingName = MfgUnlockObjectName(L"Status", pid);
+     HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, mappingName.c_str());
+     auto* shared = mapping ? static_cast<MfgUnlockStatus*>(
+@@ -6546,6 +6542,13 @@
+     executablePath.resize(executableLength < executablePath.size()
+         ? executableLength : 0);
+     const std::wstring executableDirectory = ParentPath(executablePath);
++    // Preserve the previous session and bound filenames across repeated launches.
++    const std::wstring logPath = JoinPath(executableDirectory, L"feverscaler-unlock.log");
++    if (!executableDirectory.empty() &&
++        (GetFileAttributesW(logPath.c_str()) == INVALID_FILE_ATTRIBUTES ||
++         MoveFileExW(logPath.c_str(), (logPath + L".previous").c_str(), MOVEFILE_REPLACE_EXISTING)))
++        gLog = _wfsopen(logPath.c_str(), L"w, ccs=UTF-8", _SH_DENYWR);
++    gLogReady.store(gLog != nullptr, std::memory_order_release);
+     if (gExecutablePath.empty())
+         gExecutablePath = executablePath;
+     ResolveNvidiaCompatibilityPolicy();
+@@ -6557,7 +6560,7 @@
+     gStatusPath = ResolveStatusPath(gConfigPath, executableDirectory);
+     if (MayPublishStatus(pid))
+         DeleteFileW(gStatusPath.c_str());
+-    temporal_interval_trace::Initialize(tempDirectory, pid);
++    temporal_interval_trace::Initialize(executableDirectory.c_str(), pid);
+     const ControlConfig initialControl = ReadInitialControl();
+     StoreControl(initialControl);
+     // Off the loader lock: the CUDA, DXGI and driver queries for the Ampere path happen here,
+@@ -6597,7 +6600,7 @@
+         gConfigPath.c_str());
+     if (initialControl.intervalLogging)
+     {
+-        Log(L"NGX temporal-request interval trace enabled: %s",
++        Log(L"NGX temporal counters enabled; disk trace requires FEVERSCALER_UNLOCK_TRACE=1 (1 MiB cap): %s",
+             temporal_interval_trace::FilePath());
+     }
+ 

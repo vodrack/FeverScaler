@@ -1,0 +1,28 @@
+#include <windows.h>
+#include "feverscaler_version.h"
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION FEVERSCALER_VERSION_NUMERIC
+ PRODUCTVERSION FEVERSCALER_VERSION_NUMERIC
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS @FEVERSCALER_FILE_FLAGS@
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904B0"
+  BEGIN
+   VALUE "CompanyName", "FeverScaler contributors"
+   VALUE "FileDescription", "FeverScaler DLSS integration for Transport Fever 3"
+   VALUE "FileVersion", FEVERSCALER_VERSION
+   VALUE "ProductVersion", FEVERSCALER_VERSION
+   VALUE "ProductName", "FeverScaler"
+   VALUE "OriginalFilename", "feverscaler.asi"
+   VALUE "LegalCopyright", "Copyright (c) 2026 FeverScaler contributors"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x0409, 1200
+ END
+END

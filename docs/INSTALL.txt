@@ -1,0 +1,43 @@
+FeverScaler - DLSS for Transport Fever 3 (beta)
+
+Requires Windows x64 and an NVIDIA RTX graphics card.
+
+INSTALL
+Close the game and extract the ZIP into the folder with TransportFever3.exe.
+If winhttp.dll or winhttp.ini already exists, back it up first. To share the loader
+with other ASI mods, merge their loader settings into the included winhttp.ini,
+keeping DontLoadFromDllMain=0 and RTX40MFG.asi loading before scripts\feverscaler.asi.
+
+UPDATE
+Extract the new ZIP over the old files. Your settings in scripts\feverscaler.ini stay.
+
+SETTINGS
+Settings > Graphics > FeverScaler, or the FeverScaler menu (backslash key on US
+keyboards, configurable).
+
+TURN OFF OR REMOVE
+Enabled=0 in scripts\feverscaler.ini turns FeverScaler off; the bundled unlock
+(RTX40MFG.asi) still loads. To turn everything off, move scripts\feverscaler.asi,
+RTX40MFG.asi and RTX40MFGCore.dll out of the game folder.
+
+To remove, delete:
+  scripts\feverscaler.asi
+  scripts\feverscaler\
+  RTX40MFG.asi
+  RTX40MFGCore.dll
+  FeverScaler-README.txt
+  winhttp.dll and winhttp.ini (unless other mods use them; restore your backup if
+    you made one)
+
+Optional cleanup:
+  scripts\feverscaler.ini
+  feverscaler*.log*
+  feverscaler-unlock-trace.csv
+  RTX40MFG-Universal.status.json
+  <user data>\feverscaler\, where <user data> is the folder with the game's
+    settings.lua (Steam: <Steam>\userdata\<Steam ID>\3493540\local)
+
+PROBLEMS
+Known issues: https://github.com/vodrack/FeverScaler#known-issues
+Report others at https://github.com/vodrack/FeverScaler/issues with the files listed
+in scripts\feverscaler\DIAGNOSTICS.txt.

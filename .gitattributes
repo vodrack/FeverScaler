@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.png binary
+licenses/* -text
+patches/*.patch text eol=lf

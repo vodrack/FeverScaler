@@ -1,0 +1,16 @@
+FeverScaler diagnostic logs
+
+Attach these from the game folder to bug reports, and say roughly when the problem
+happened:
+
+  feverscaler-events.log and feverscaler-events.log.previous
+  feverscaler.log and feverscaler.log.previous
+  feverscaler-unlock.log and feverscaler-unlock.log.previous
+  scripts\feverscaler.ini
+
+The .previous files hold the session before the last restart.
+
+Advanced:
+SlLogLevel=2 in scripts\feverscaler.ini adds Streamline informational messages.
+FEVERSCALER_UNLOCK_TRACE=1 in the launch environment writes a frame timing trace
+of the unlock, feverscaler-unlock-trace.csv, up to 1 MiB.

@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+// Camera motion for every pixel: reproject the depth-buffer position into last frame's clip
+// space. Exact for everything that does not move on its own; the replay pass overwrites the
+// pixels of moving objects afterwards.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 1) uniform sampler2D depthTex;
+layout(set = 0, binding = 3, rg16f) uniform writeonly image2D mvOut;
+
+void main() {
+  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+  if (p.x >= int(u_frame.size.x) || p.y >= int(u_frame.size.y)) return;
+  float d = texelFetch(depthTex, p, 0).r;
+  vec2 uv = (vec2(p) + 0.5) * u_frame.size.zw;
+  vec4 clip = vec4(uv * 2.0 - 1.0, d, 1.0);
+  vec4 prev = u_frame.clipToPrevClip * clip;
+  // The depth was rendered with the DLSS jitter; motion vectors are reported without it.
+  vec2 mv = (prev.xy / prev.w - (clip.xy - u_frame.jitter.xy)) * 0.5;  // previous UV - current UV
+  imageStore(mvOut, p, vec4(mv, 0.0, 0.0));
+}
