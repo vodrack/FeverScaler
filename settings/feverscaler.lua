@@ -1,20 +1,21 @@
 -- FeverScaler settings in the game's own Settings > Graphics tab.
 --
--- The settings page builds its tabs as plain tables inside one file-local function, with no
--- extension point. This script loads a second instance of the game's settings_page.tl whose
--- `ipairs` is a pass-through that adds one more group to the Graphics tab (and disables the game's
--- Resolution Scale slider while DLSS sets the render resolution), and registers that instance as
--- the replacement for the SettingsPage recipe (the game's recipe replacement API).
--- The page itself stays the game's own code, so it follows game updates. The page's option types
--- have no key binding for anything but the game's own actions, so that instance also gets a
--- `builtin` that adds a key button to the dev menu key's row.
+-- The plugin serves the game's settings page module, gui/menu/settings_page.tl, as base-game
+-- content (src/bridge.cpp): it returns this script's result, the page that the main menu and the
+-- in-game menu show. The game's own page module is served at SETTINGS_PAGE.
 --
--- The plugin serves this script to the game as base-game content (src/bridge.cpp), so it runs only
--- while the plugin is active, in the main menu and in every save. The plugin owns the settings and
--- mirrors them to <userdata>/feverscaler/state.lua, which this script reads and writes with
--- app.loadUserdata / app.saveUserdata.
+-- The settings page builds its tabs as plain tables inside one file-local function, with no
+-- extension point. This script loads a second instance of the game's page whose `ipairs` is a
+-- pass-through that adds one more group to the Graphics tab (and disables the game's Resolution
+-- Scale slider while DLSS sets the render resolution). The page itself stays the game's own code,
+-- so it follows game updates. The page's option types have no key binding for anything but the
+-- game's own actions, so that instance also gets a `builtin` that adds a key button to the dev menu
+-- key's row.
+--
+-- The plugin owns the settings and mirrors them to <userdata>/feverscaler/state.lua, which this
+-- script reads and writes with app.loadUserdata / app.saveUserdata.
 
-local SETTINGS_PAGE = "::/gui/menu/settings_page.tl"
+local SETTINGS_PAGE = "::/feverscaler/game_settings_page.tl"
 local MENU_KEY = "FeverScaler Menu Key" -- the dev menu key's row
 local DIR, FILE = "feverscaler", "state"
 
@@ -379,14 +380,14 @@ local function loadPatchedSettingsPage()
 	return patched
 end
 
-local function replaceSettingsPage(replacementApi)
-	local original = ug_require(SETTINGS_PAGE)
+-- The page with the FeverScaler group, or `original`, the game's own page, once it failed.
+local function extendSettingsPage(original)
 	local patched = loadPatchedSettingsPage()
 	if patched == original then
 		error("the settings page was not loaded a second time", 0)
 	end
 	local failed = false -- the extended page failed once: the game's own page from then on
-	local page = react.RegisterRecipe("FeverScalerSettingsPage", function(params)
+	return react.RegisterRecipe("FeverScalerSettingsPage", function(params)
 		local redraws = react.useState(0) -- declared on every render, whichever page follows
 		if not failed then
 			local ok, result = pcall(function()
@@ -407,20 +408,15 @@ local function replaceSettingsPage(replacementApi)
 			redrawPage = nil
 			log.warning("FeverScaler: the extended settings page failed, showing the game's own page: " .. tostring(result))
 		end
-		return builtin.BoxLayout { children = { react.CallOriginalRecipe(original, params) } }
+		return builtin.BoxLayout { children = { original(params) } }
 	end)
-	replacementApi.ReplaceRecipe(original, page)
 end
 
-function data()
-	return {
-		doReplace = function(replacementApi)
-			local ok, err = pcall(replaceSettingsPage, replacementApi)
-			if ok then
-				log.message("FeverScaler: settings page extended")
-			else
-				log.warning("FeverScaler: could not extend the settings page: " .. tostring(err))
-			end
-		end,
-	}
+local original = ug_require(SETTINGS_PAGE)
+local ok, page = pcall(extendSettingsPage, original)
+if not ok then
+	log.warning("FeverScaler: could not extend the settings page: " .. tostring(page))
+	return original
 end
+log.message("FeverScaler: settings page extended")
+return page

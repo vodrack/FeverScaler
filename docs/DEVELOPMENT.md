@@ -194,21 +194,26 @@ What to attach to a bug report: [docs/diagnostics.txt](diagnostics.txt) (shipped
 The plugin adds a "FeverScaler" group to the Graphics tab of the game's settings page, below
 "Window Settings", in the main menu and in every save.
 
-- **How the script gets into the game** (`src/bridge.cpp`). The group comes from a game script,
-  `settings/` (installed to `scripts\feverscaler\settings\`). The game runs a mod's scripts only in
-  saves with that mod enabled, but base-game content everywhere, so the plugin serves the script as
-  base content. Base content is `base\content`, listed in `base\_content.json`. At every start the
-  plugin writes a copy of that list with the script's files added
-  (`scripts\feverscaler\base_content.json`) and hooks the game's file access (`CreateFileW`,
-  `GetFileAttributesW`, `GetFileAttributesExW`, `FindFirstFileW`): reads of the list get the copy,
-  and `base\content\feverscaler\` is `scripts\feverscaler\settings\`. Nothing in the game's own
-  folders changes. The log shows `bridge: settings page served` and the first redirected file
-  accesses. With `Enabled=0` nothing is served and the page is the game's own.
+- **How the page gets into the game** (`src/bridge.cpp`). The main menu and the in-game menu both
+  load the settings page module `gui/menu/settings_page.tl`. The game runs a mod's scripts only in
+  saves with that mod enabled, and its recipe replacement (`react-replacement-config`) only in
+  saves, so the plugin serves that module itself, as base content. Base content is `base\content`,
+  listed in `base\_content.json`; the game's page is an entry of `gui.zip` there. At every start the
+  plugin writes a copy of that list (`scripts\feverscaler\base_content.json`) in which that entry
+  is renamed to `feverscaler/game_settings_page.tl` (same archive data) and
+  `gui/menu/settings_page.tl` and `feverscaler/feverscaler.lua` are loose files. It hooks the
+  game's file access (`CreateFileW`, `GetFileAttributesW`, `GetFileAttributesExW`,
+  `FindFirstFileW`): reads of the list get the copy, and the two loose files come from
+  `scripts\feverscaler\settings\` (installed from `settings/`). Nothing in the game's own folders
+  changes. The game compiles `.tl` modules as Teal, so the served `settings_page.tl` is one line
+  that returns the page made by the Lua script `feverscaler.lua`. Without that archive entry or a
+  served file nothing is served. The log shows `bridge: settings page served` and the first
+  redirected file accesses. With `Enabled=0` nothing is served and the page is the game's own.
 - **How it gets into the page.** The settings page builds its tabs inside one local function and has
-  no extension point. The script loads a second instance of the game's `settings_page.tl` whose
-  `ipairs` adds the group to the Graphics tab, and registers it through the game's recipe replacement
-  (`settings_page.res.lua`, a `react-replacement-config`). The page stays the game's own code. If a
-  game update changes what the script relies on, it logs a warning and the page is the unmodified one.
+  no extension point. The script loads a second instance of the game's page whose `ipairs` adds the
+  group to the Graphics tab, and its page shows that instance. The page stays the game's own code.
+  If a game update changes what the script relies on, it logs a warning and shows the game's own
+  page.
 - **The menu key's button.** The page's option types bind keys only for the game's own actions. The
   script's page instance therefore also gets a `builtin` whose `TextView` turns the "FeverScaler
   Menu Key" label into the label plus a key button, styled like the game's key binding rows, with
@@ -242,8 +247,8 @@ The plugin adds a "FeverScaler" group to the Graphics tab of the game's settings
 | DLSS SR (in `frame.cpp`) | jitters the camera block before submit, runs DLSS on the post-compose scene copy at the UI pass, hands the result to that UI pass only (see [Rendering failure handling](#rendering-failure-handling)) |
 | `src/mip_bias.cpp` | copies of the game's descriptor sets: biased samplers for the world pass while DLSS upscales, the DLSS output in place of the scene image for the UI pass |
 | `src/overlay.cpp` | dev menu: Dear ImGui drawn into the presented image, WndProc subclass for mouse input |
-| `src/bridge.cpp` | serves the settings script to the game; its state file |
-| `settings/` | the settings script and the resource file that registers it |
+| `src/bridge.cpp` | serves the settings page to the game; its state file |
+| `settings/` | the settings script and the page module that loads it |
 
 ## Rendering failure handling
 

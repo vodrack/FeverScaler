@@ -9,6 +9,7 @@
 
 #include <MinHook.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -69,38 +70,50 @@ bool WriteAll(const std::wstring& path, const std::string& bytes) {
   return ok && MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
 }
 
-// ---- the settings script as base-game content -----------------------------------------------------
-std::wstring g_list;      // <game>\base\_content.json
-std::wstring g_listCopy;  // the plugin's copy of it with the served files; empty: nothing is served
-std::wstring g_content;   // <game>\base\content\feverscaler\ ...
-std::wstring g_served;    // ... is scripts\feverscaler\settings\ (both with a trailing backslash)
+// ---- the settings page as base-game content -------------------------------------------------------
+const char kPage[] = "gui/menu/settings_page.tl";              // the game's settings page module
+const char kGamePage[] = "feverscaler/game_settings_page.tl";  // where the copied list moves the game's own
 
-bool HasI(const wchar_t* s, const wchar_t* part) {
-  size_t n = wcslen(part);
-  for (; *s; ++s)
-    if (!_wcsnicmp(s, part, n)) return true;
-  return false;
-}
+// Base content the plugin serves from the file of the same name in scripts\feverscaler\settings\.
+struct ServedFile {
+  const char* path;     // in base content
+  std::wstring name;    // its file name
+  std::wstring game;    // what the game opens: <game>\base\content\<path>
+  std::wstring plugin;  // what it gets
+};
+ServedFile g_files[] = {{kPage}, {"feverscaler/feverscaler.lua"}};
+std::wstring g_list;      // <game>\base\_content.json
+std::wstring g_listCopy;  // the plugin's copy of it; empty: nothing is served
 
 // What the game gets instead of `name`, or "" for its own file.
 std::wstring Served(LPCWSTR name, const char* api) {
   if (!name || t_ours || g_listCopy.empty()) return {};
-  if (!HasI(name, L"_content.json") && !HasI(name, L"feverscaler")) return {};  // nearly every file
+  const wchar_t* file = name;
+  for (const wchar_t* p = name; *p; ++p)
+    if (*p == L'\\' || *p == L'/') file = p + 1;
+  bool ours = !_wcsicmp(file, L"_content.json");
+  for (const ServedFile& f : g_files) ours = ours || !_wcsicmp(file, f.name.c_str());
+  if (!ours) return {};  // nearly every file
   wchar_t full[1024];
   DWORD n = GetFullPathNameW(name, 1024, full, nullptr);
   if (!n || n >= 1024) return {};
   std::wstring served;
-  size_t dir = g_content.size() - 1;  // the folder itself, or a path in it
   if (!_wcsicmp(full, g_list.c_str())) served = g_listCopy;
-  else if (n >= dir && !_wcsnicmp(full, g_content.c_str(), dir) && (!full[dir] || full[dir] == L'\\'))
-    served = g_served.substr(0, g_served.size() - 1) + (full + dir);
-  else return {};
+  for (const ServedFile& f : g_files)
+    if (!_wcsicmp(full, f.game.c_str())) served = f.plugin;
+  if (served.empty()) return {};
   FEVERSCALER_LOG_N(20, "bridge: %s %S -> %S", api, name, served.c_str());
   return served;
 }
 
-// Writes `copy`: the game's content list with the files in g_served added to its loose files.
+// Writes `copy`: the game's content list with its settings page module, in one of its archives (listed
+// before the loose files), renamed to kGamePage and the served files added to its loose files.
 bool CopyList(const std::wstring& copy) {
+  for (const ServedFile& f : g_files)
+    if (GetFileAttributesW(f.plugin.c_str()) == INVALID_FILE_ATTRIBUTES) {
+      Log("bridge: %S missing - no settings page", f.plugin.c_str());
+      return false;
+    }
   std::string list;
   if (!ReadAll(g_list, list)) {
     Log("bridge: cannot read %S - no settings page", g_list.c_str());
@@ -112,25 +125,18 @@ bool CopyList(const std::wstring& copy) {
     Log("bridge: no file list in %S - no settings page", g_list.c_str());
     return false;
   }
-  std::string add;
-  WIN32_FIND_DATAW fd;
-  HANDLE find = FindFirstFileW((g_served + L"*").c_str(), &fd);
-  if (find != INVALID_HANDLE_VALUE) {
-    do {
-      char file[MAX_PATH];
-      if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-          WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, file, MAX_PATH, nullptr, nullptr))
-        add += std::string("\"feverscaler/") + file + "\",";
-    } while (FindNextFileW(find, &fd));
-    FindClose(find);
-  }
-  if (add.empty()) {
-    Log("bridge: no files in %S - no settings page", g_served.c_str());
+  const std::string page = std::string("\"") + kPage + "\"";
+  size_t at = list.find(page);
+  if (at > key || list.find(page, at + 1) != std::string::npos) {
+    Log("bridge: %s is not in an archive of %S - no settings page", kPage, g_list.c_str());
     return false;
   }
+  std::string add;
+  for (const ServedFile& f : g_files) add += std::string("\"") + f.path + "\",";
   size_t next = list.find_first_not_of(" \t\r\n", open + 1);
   if (next != std::string::npos && list[next] == ']') add.pop_back();  // an empty list takes no comma
   list.insert(open + 1, add);
+  list.replace(at, page.size(), std::string("\"") + kGamePage + "\"");  // before `open`: not moved
   std::string old;
   if (ReadAll(copy, old) && old == list) return true;
   if (WriteAll(copy, list)) return true;
@@ -334,8 +340,13 @@ void Apply(const State& file, const State& published) {
 
 void BridgeInit() {
   g_list = GameDir() + L"base\\_content.json";
-  g_content = GameDir() + L"base\\content\\feverscaler\\";
-  g_served = PluginDir() + L"feverscaler\\settings\\";
+  for (ServedFile& f : g_files) {
+    std::wstring path(f.path, f.path + strlen(f.path));  // ASCII
+    std::replace(path.begin(), path.end(), L'/', L'\\');
+    f.name = path.substr(path.find_last_of(L'\\') + 1);
+    f.game = GameDir() + L"base\\content\\" + path;
+    f.plugin = PluginDir() + L"feverscaler\\settings\\" + f.name;
+  }
   std::wstring copy = PluginDir() + L"feverscaler\\base_content.json";
   if (CopyList(copy)) g_listCopy = copy;
   MH_STATUS i = MH_Initialize();

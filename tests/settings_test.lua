@@ -42,8 +42,8 @@ api = {
 -- Just enough of the game's UI modules. Recipes keep their hook state between calls (one instance
 -- per recipe name). A settings page instance is a recipe whose node records the instance, its
 -- parameters and a Label row made with the builtin the instance got when it loaded; instances
--- after the first can be made to fail.
-local SETTINGS_PAGE = "::/gui/menu/settings_page.tl"
+-- after the first can be made to fail. Each instance's `ipairs` is kept: the script's is the way in.
+local SETTINGS_PAGE = "::/feverscaler/game_settings_page.tl"
 local hooks, hook = {}, 0
 local current
 local function cell(value)
@@ -70,13 +70,12 @@ local ui = {
         return { get = function() return c.value end, set = function(_, v) c.value = v end }
     end,
     onMouseEvent = function() end,
-    CallOriginalRecipe = function(recipe, params) return { original = recipe, params = params } end,
     BoxLayout = function(t) t.nodeType = "layout"; return t end,
     Button = function(t) return t end,
     TextView = function(t) return t end,
     type = { Orientation = { Horizontal = "horizontal" } },
 }
-local pageInstances, failPatchedPage = 0, false
+local pageInstances, pageIpairs, failPatchedPage = 0, {}, false
 _ug_loadedModules = {}
 resolveutil = { resolve = function(path) return path end }
 local function stubRequire(path)
@@ -84,6 +83,7 @@ local function stubRequire(path)
     if not _ug_loadedModules[path] then
         pageInstances = pageInstances + 1
         local instance = pageInstances
+        pageIpairs[instance] = ipairs
         local builtin = ug_require("/gui/main/builtin.lua")
         _ug_loadedModules[path] = function(params)
             if instance > 1 and failPatchedPage then error("changed by a game update") end
@@ -94,9 +94,12 @@ local function stubRequire(path)
 end
 ug_require = stubRequire
 log = { warning = function(message) error(message) end, message = function() end }
-dofile("settings/feverscaler.script.lua")
+local realIpairs = ipairs
+local page = dofile("settings/feverscaler.lua")
+assert(ipairs == realIpairs and ug_require == stubRequire and pageIpairs[1] == realIpairs)
+local settingsIpairs = pageIpairs[2]
 
--- Walk closures rather than adding a test-only export to the game's mod API.
+-- Walk closures rather than adding a test-only export to the script's module.
 local seen = {}
 local function find(fn, name)
     if seen[fn] then return end
@@ -111,7 +114,7 @@ local function find(fn, name)
         end
     end
 end
-local makeGroup = assert(find(data().doReplace, "makeGroup"))
+local makeGroup = assert(find(settingsIpairs, "makeGroup"))
 
 -- Before the plugin has written its state the group says so, and the script asks for it once.
 assert(makeGroup().options[1].name == "FeverScaler did not report its settings")
@@ -188,8 +191,6 @@ end
 -- The Graphics tab gets the group after "Window Settings". While DLSS Quality sets the render
 -- resolution the game's Resolution Scale slider is disabled; it stays usable whenever DLSS cannot
 -- set it (SR off or unusable, or no render scale control on this game build).
-seen = {}
-local settingsIpairs = assert(find(data().doReplace, "settingsIpairs"))
 local function graphicsGroups()
     local groups = { { options = { { key = "screenMode" }, { key = "resolutionScale", description = "FSR" } } } }
     for _ in settingsIpairs(groups) do end
@@ -211,22 +212,16 @@ reset({ scaleControl = false })
 opts = options()
 assert(opts["DLSS Quality"].disabled and opts["Preview Resolution"].disabled)
 
--- The settings page is replaced by the extended one, which falls back to the game's own page if
--- it fails.
-local replaced
-local replacement = { ReplaceRecipe = function(original, page) replaced = { original = original, page = page } end }
+-- The script is the extended settings page, which falls back to the game's own page if it fails.
 reset()
-data().doReplace(replacement)
-assert(replaced, "the settings page is extended")
-assert(ug_require == stubRequire)
-local view = replaced.page({ tab = "graphics" })
+local view = page({ tab = "graphics" })
 assert(view.children[1].page == 2 and view.children[1].params.tab == "graphics")
 
 -- The dev menu key's row in the extended page gets a button that takes the next key combination.
 assert(options()["FeverScaler Menu Key"].type == "Label")
 assert(_ug_loadedModules[SETTINGS_PAGE]({}).row.children == nil, "the game's own page instance is untouched")
 local function keyRow()
-    local row = replaced.page({ tab = "graphics" }).children[1].row
+    local row = page({ tab = "graphics" }).children[1].row
     assert(row.children[1].text == "FeverScaler Menu Key")
     return row.children[2].children[1]
 end
@@ -264,11 +259,11 @@ assert(disk.menuKey == 9 and writes == 2 and keyRow().content.text == "9")
 failPatchedPage = true
 local warnings = 0
 log.warning = function() warnings = warnings + 1 end
-view = replaced.page({ tab = "graphics" })
-assert(view.children[1].original == replaced.original and view.children[1].params.tab == "graphics",
+view = page({ tab = "graphics" })
+assert(view.children[1].page == 1 and view.children[1].params.tab == "graphics",
     "a failing extended page must show the game's own page")
 failPatchedPage = false
-view = replaced.page({ tab = "graphics" })
-assert(view.children[1].original == replaced.original and warnings == 1, "the fallback sticks and is logged once")
+view = page({ tab = "graphics" })
+assert(view.children[1].page == 1 and warnings == 1, "the fallback sticks and is logged once")
 print("PASS: state request, settings capabilities, x2-x6, persistence, dev menu key, "
-    .. "unavailable features, Resolution Scale lock and settings page replacement")
+    .. "unavailable features, Resolution Scale lock and the extended settings page")
