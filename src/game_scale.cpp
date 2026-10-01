@@ -10,7 +10,8 @@
 //   - to 0x0 and back to its render size at scale 1.0, and up and back at scale 1.0 for screenshots.
 // While a DLSS preset is active every window-size resize of the world view gets the preset's scale,
 // so the slider has no effect. A preset change repeats the game's last window-size resize on the
-// window thread, the thread the game resizes from itself.
+// window thread, the thread the game resizes from itself, and so does an MSAA change by
+// game_settings.cpp: like the game's settings apply, it needs that resize for the view's render targets.
 //
 // FSR1: each frame the renderer upscales with FSR1 and shows its output if its FSR settings are
 // enabled and the slider is at 95 % or below (0x1402FD1E8, 0x1402FE2BC). The game enables them with
@@ -189,13 +190,13 @@ void __fastcall h_Resize(void* renderer, ViewConfig* cfg) {
       (unsigned long long)(ret - base));
   o_Resize(renderer, cfg);
 }
+}  // namespace
 
-// Window thread: repeat the game's last window-size resize of the world view with the current scale.
-void ResizeOnWindowThread() {
+void GameScaleResizeWorld() {
   // Only while the world view is being drawn: its renderer is then certainly alive. Otherwise the
-  // game's own next resize (e.g. loading a save) applies the preset.
+  // game's own next resize (e.g. loading a save) applies the change.
   if (GetTickCount64() - LastWorldPassTick() > 500) {
-    Log("render scale: no world view on screen - applies at the game's next resize");
+    Log("world view resize: no world view on screen - applies at the game's next resize");
     return;
   }
   Call mainCall;
@@ -208,12 +209,11 @@ void ResizeOnWindowThread() {
   ViewConfig c = mainCall.cfg;
   if (o > 0.0f) c.scale = o;
   SyncFsr(mainCall.renderer, o > 0.0f);
-  Log("resize for DLSS preset: %dx%d at scale %.3f", c.width, c.height, c.scale);
+  Log("world view resize: %dx%d at scale %.3f", c.width, c.height, c.scale);
   t_ours = true;
   o_Resize(mainCall.renderer, &c);
   t_ours = false;
 }
-}  // namespace
 
 bool GameScaleInit() {
   uint8_t* base = (uint8_t*)GetModuleHandleW(nullptr);
@@ -277,7 +277,7 @@ void GameScalePoll() {
   g_requested = false;
   if (GetTickCount64() - LastWorldPassTick() > 500) return;  // not in the world: the next game resize applies it
   if (g_resizeThread.load() == OverlayWindowThread()) {
-    OverlayRunOnWindowThread(&ResizeOnWindowThread);
+    OverlayRunOnWindowThread(&GameScaleResizeWorld);
   } else {
     Log("render scale: the game resizes on thread %lu, not the window thread %lu - applies at its next resize",
         g_resizeThread.load(), OverlayWindowThread());

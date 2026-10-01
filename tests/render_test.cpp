@@ -44,6 +44,7 @@ float GameSliderScale() { return slider; }
 float GameScaleOverride() { return overrideScale; }
 void GameSetScaleOverride(float s) { overrideScale = s; }
 void GameScalePoll() {}
+void GameScaleResizeWorld() {}
 VramInfo QueryVram() { return {}; }
 bool SlCoreReady() { return core; }
 bool SlFgReady() { return fgReady; }

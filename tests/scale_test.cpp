@@ -1,5 +1,6 @@
-// The render-resolution hooks with fake game functions: no game, no hook installation.
+// The render-resolution and MSAA hooks with fake game functions: no game, no hook installation.
 #include "../src/game_scale.cpp"
+#include "../src/game_settings.cpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,9 @@
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "line %d: %s\n", __LINE__, #x); std::exit(1); } } while (0)
 
 namespace feverscaler {
+static bool fgReady = false, srRequested = false;
+bool SlFgReady() { return fgReady; }
+bool SrRequested() { return srRequested; }
 void Log(const char*, ...) {}
 const Config& Cfg() { static Config c; return c; }
 float ReadGameResolutionScale(const wchar_t*) { return 0; }
@@ -21,12 +25,13 @@ bool OverlayRunOnWindowThread(void (*fn)()) { fn(); return true; }
 
 using namespace feverscaler;
 
-// What reached the game: resizes and FSR1 settings, in order.
+// What reached the game: resizes, FSR1 settings and MSAA sample counts, in order.
 struct Event {
-  void* renderer;
+  void* renderer;  // or the render context, for MSAA
   bool fsr;
   ViewConfig cfg;
   FsrSettings settings;
+  int samples = 0;  // > 0: the MSAA setter
 };
 static std::vector<Event> events;
 static void* const world = (void*)0x1000;
@@ -92,6 +97,32 @@ int main() {
   game.enabled = 0;
   h_SetFsr(world, &game);
   CHECK(worldFsr.enabled == 0);
+
+  // A DLSS switch repeats the game's VSync/MSAA calls on the window thread. As after the game's
+  // settings apply, a new sample count is followed by the world view's resize, which rebuilds its
+  // render targets for it; a VSync-only change resizes nothing.
+  void* const context = (void*)0x3000;
+  o_SetVsync = [](void*, bool) {};
+  o_SetMsaa = [](void* c, int samples) { events.push_back({c, false, {}, {}, samples}); };
+  h_SetVsync(context, true);
+  h_SetMsaa(context, 2);  // the game's settings apply, both switches off
+  srRequested = true;
+  events.clear();
+  GameSettingsPoll();
+  CHECK(events.size() == 2 && events[0].renderer == context && events[0].samples == 1);
+  CHECK(events[1].renderer == world && !events[1].samples && events[1].cfg.width == 3440);
+  fgReady = true;
+  events.clear();
+  GameSettingsPoll();  // VSync off for DLSS-G, still one sample
+  CHECK(events.size() == 1 && events[0].samples == 1);
+  fgReady = srRequested = false;
+  events.clear();
+  GameSettingsPoll();
+  CHECK(events.size() == 2 && events[0].samples == 2 && events[1].renderer == world);
+  events.clear();
+  GameSettingsPoll();
+  CHECK(events.empty());
   std::puts("PASS: preset scale for every window-size resize of the world view, other resizes untouched, FSR1 off "
-            "while the preset applies and the game's settings kept and restored");
+            "while the preset applies and the game's settings kept and restored, MSAA changes followed by the "
+            "world view's resize");
 }

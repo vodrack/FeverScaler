@@ -13,4 +13,8 @@ float GameSliderScale();    // the game's own Resolution Scale setting (0 if unk
 void GameSetScaleOverride(float scale);
 float GameScaleOverride();
 void GameScalePoll();       // present thread, once per frame: drives a requested resize
+// Window thread: repeats the game's last window-size resize of the world view with the current
+// scale, which also rebuilds its render targets after an MSAA change. Skipped while no world view
+// is on screen (the game's next resize applies it).
+void GameScaleResizeWorld();
 }  // namespace feverscaler

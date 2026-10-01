@@ -122,8 +122,11 @@ What to attach to a bug report: [docs/diagnostics.txt](diagnostics.txt) (shipped
   settings). A read-only context query captures the initial values too, since startup initializes
   them directly without calling those setters. The saved settings do not change and apply again
   when both switches are off. A switch change repeats the game's last calls on the window thread;
-  the game then recreates its swapchain or rebuilds its render passes and pipelines. The log shows
-  `game VSync ...` / `game MSAA ...`.
+  the game then recreates its swapchain or rebuilds its render passes and pipelines. A new sample
+  count is then followed by the world view's resize, as in the game's own settings apply: only
+  that resize rebuilds the view's render targets, and render passes with the new count on the old
+  targets crash the driver. The log shows `game VSync ...` / `game MSAA ...` and
+  `world view resize ...`.
 - In the background TF3 throttles itself to about 30 fps, where DLSS-G generates no frames (the log
   shows `x1.0`–`x1.3` instead of `x2.00`).
 - The plugin follows the game's render size. With a resolution scale below 100 % the HUD-less image

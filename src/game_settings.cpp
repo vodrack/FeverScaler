@@ -4,11 +4,15 @@
 // settings-apply function (0x140E71E40) calls them after settings changes:
 //   slot 22 (0x142D01360): VSync (bool); the context recreates its swapchain at the next frame
 //   slot 23 (0x142D00B80): VulkanRenderContext::SetDefaultNumSamplesMSAA (int); the context
-//                          rebuilds its render passes and pipelines
+//                          rebuilds its render passes and pipelines, not the world view's render
+//                          targets: the settings apply resizes the world view after it (0x140E72642)
 // The hooks give the context VSync off while DLSS-G is on (DLSS-G on Vulkan does not support
 // VSync) and one sample while either DLSS feature is on (their inputs come from a copy of the
 // scene depth, which cannot be multisampled). When a DLSS switch changes, the game's last calls are
-// repeated with the new values on the window thread, the thread the game applies its settings from.
+// repeated with the new values on the window thread, the thread the game applies its settings from,
+// and a new sample count is followed by the world view's resize, as in the settings apply. Without
+// it the next frame begins the new render passes on the old targets and the driver crashes in
+// vkCmdBeginRenderPass.
 #include "game_settings.h"
 
 #include <windows.h>
@@ -20,6 +24,7 @@
 
 #include "config.h"
 #include "frame.h"
+#include "game_scale.h"
 #include "log.h"
 #include "overlay.h"
 #include "sl_bridge.h"
@@ -114,8 +119,10 @@ void __fastcall h_SetMsaa(void* ctx, int samples) {
 // Window thread: the game's last calls again, with the current DLSS switches.
 void ApplyOnWindowThread() {
   void* ctx = g_ctx.load();
+  int samples = g_msaa.load();
   SetVsync(ctx, g_gameVsync.load() != 0);
   SetMsaa(ctx, g_gameMsaa.load());
+  if (g_msaa.load() != samples) GameScaleResizeWorld();
   g_pending = false;
 }
 }  // namespace
