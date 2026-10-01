@@ -62,8 +62,8 @@ game; run it with Lua 5.4 from the repository root.
 preset and the package check on Windows, the settings test on Linux. The run keeps the ZIP as its
 `packages` artifact and `feverscaler.map` as its `map` artifact. Pushing a tag `v<VERSION>` (for
 example `v0.1.0-beta`) also publishes a GitHub release with the ZIP and `SHA256SUMS.txt`, with
-GitHub's generated release notes. A version with a suffix such as `-beta` is published as a
-pre-release. The release fails if the tag does not match `VERSION`.
+GitHub's generated release notes, marked as the latest release. The release fails if the tag does
+not match `VERSION`.
 
 ## Diagnostics
 
